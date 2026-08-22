@@ -53,32 +53,10 @@ st.markdown("""
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
     }
-    .brand-badge {
-        background: rgba(56, 189, 248, 0.12);
-        color: #38BDF8;
-        border: 1px solid rgba(56, 189, 248, 0.35);
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
     .header-actions {
         display: flex;
         align-items: center;
         gap: 14px;
-    }
-    .header-icon-btn {
-        background: rgba(30, 41, 59, 0.7);
-        border: 1px solid rgba(148, 163, 184, 0.25);
-        color: #94A3B8;
-        border-radius: 8px;
-        padding: 6px 12px;
-        font-size: 0.88rem;
-        display: flex;
-        align-items: center;
-        gap: 6px;
     }
     .user-pill {
         display: flex;
@@ -138,31 +116,6 @@ st.markdown("""
         letter-spacing: -0.3px;
         margin-bottom: 4px;
     }
-    .sidebar-beacon {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 0.76rem;
-        color: #34D399;
-        font-weight: 600;
-        background: rgba(16, 185, 129, 0.12);
-        padding: 3px 8px;
-        border-radius: 12px;
-        border: 1px solid rgba(16, 185, 129, 0.3);
-    }
-    .beacon-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background-color: #34D399;
-        box-shadow: 0 0 8px #34D399;
-        animation: pulseBeacon 2s infinite ease-in-out;
-    }
-    @keyframes pulseBeacon {
-        0% { transform: scale(0.9); opacity: 0.7; }
-        50% { transform: scale(1.3); opacity: 1; }
-        100% { transform: scale(0.9); opacity: 0.7; }
-    }
     .sidebar-section-header {
         font-size: 0.72rem;
         font-weight: 800;
@@ -172,25 +125,6 @@ st.markdown("""
         margin-top: 18px;
         margin-bottom: 8px;
         padding-left: 4px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-    }
-    .sidebar-pill-badge {
-        font-size: 0.68rem;
-        padding: 2px 6px;
-        border-radius: 6px;
-        font-weight: 700;
-    }
-    .badge-orange {
-        background: rgba(249, 115, 22, 0.18);
-        color: #FB923C;
-        border: 1px solid rgba(249, 115, 22, 0.4);
-    }
-    .badge-cyan {
-        background: rgba(6, 182, 212, 0.18);
-        color: #22D3EE;
-        border: 1px solid rgba(6, 182, 212, 0.4);
     }
     .sidebar-telemetry-box {
         background: rgba(15, 23, 42, 0.7);
@@ -315,6 +249,46 @@ st.markdown("""
         font-size: 0.82rem;
     }
 
+    /* Attached Doc Badge & ChatGPT File Chip */
+    .attached-file-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(14, 165, 233, 0.14);
+        border: 1px solid rgba(14, 165, 233, 0.35);
+        color: #38BDF8;
+        padding: 5px 12px;
+        border-radius: 8px;
+        font-size: 0.84rem;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+    .chatgpt-file-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        background: rgba(15, 23, 42, 0.95);
+        border: 1px solid rgba(56, 189, 248, 0.35);
+        border-radius: 8px;
+        padding: 8px 16px;
+        margin-bottom: 8px;
+        font-size: 0.86rem;
+        color: #E2E8F0;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+    }
+    .chatgpt-file-icon {
+        color: #38BDF8;
+        font-size: 1.15rem;
+    }
+    .chatgpt-file-name {
+        font-weight: 600;
+        color: #F8FAFC;
+    }
+    .chatgpt-file-meta {
+        color: #94A3B8;
+        font-size: 0.76rem;
+    }
+
     /* Thinking Component */
     div[data-testid="stExpander"] {
         border: 1px solid #2D3748 !important;
@@ -395,6 +369,61 @@ def fetch_overview_metrics(base_url: str):
     }
 
 
+def extract_uploaded_file_content(uploaded_file):
+    """Extracts clean text and metadata from uploaded PDF, CSV, Excel, TXT, JSON, or images."""
+    if uploaded_file is None:
+        return None, None
+    
+    file_name = uploaded_file.name
+    file_size_kb = uploaded_file.size / 1024
+    file_ext = file_name.split('.')[-1].lower()
+    
+    try:
+        if file_ext == "pdf":
+            import pypdf
+            reader = pypdf.PdfReader(uploaded_file)
+            extracted_pages = []
+            for i, page in enumerate(reader.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    extracted_pages.append(f"--- Page {i+1} ---\n{page_text}")
+            full_text = "\n\n".join(extracted_pages)
+            summary = f"PDF Document: {file_name} ({len(reader.pages)} pages, {file_size_kb:.1f} KB)"
+            return summary, full_text[:12000]
+            
+        elif file_ext in ["csv", "tsv"]:
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file)
+            summary = f"CSV Dataset: {file_name} ({len(df)} rows, {len(df.columns)} cols, {file_size_kb:.1f} KB)"
+            text_repr = f"Columns: {', '.join(df.columns)}\n\nSample Records:\n{df.head(15).to_string(index=False)}"
+            return summary, text_repr
+            
+        elif file_ext in ["xlsx", "xls"]:
+            uploaded_file.seek(0)
+            df = pd.read_excel(uploaded_file)
+            summary = f"Excel Spreadsheet: {file_name} ({len(df)} rows, {len(df.columns)} cols, {file_size_kb:.1f} KB)"
+            text_repr = f"Columns: {', '.join(df.columns)}\n\nSample Records:\n{df.head(15).to_string(index=False)}"
+            return summary, text_repr
+            
+        elif file_ext in ["txt", "md", "json", "log", "sql"]:
+            uploaded_file.seek(0)
+            text = uploaded_file.read().decode("utf-8", errors="replace")
+            summary = f"Text File: {file_name} ({len(text)} chars, {file_size_kb:.1f} KB)"
+            return summary, text[:12000]
+            
+        elif file_ext in ["png", "jpg", "jpeg", "webp"]:
+            summary = f"Image File: {file_name} ({file_size_kb:.1f} KB)"
+            return summary, f"[Attached Image: {file_name} - Visual Claim Evidence / Receipt]"
+            
+        else:
+            uploaded_file.seek(0)
+            text = uploaded_file.read().decode("utf-8", errors="replace")
+            return f"File: {file_name}", text[:8000]
+            
+    except Exception as e:
+        return f"File: {file_name} (Parsing Note)", f"File content preview unavailable: {str(e)}"
+
+
 def call_cortex_agent(base_url: str, db: str, schema: str, agent: str, prompt: str, model: str):
     endpoint_url = f"{base_url}/api/v2/databases/{db}/schemas/{schema}/agents/{agent}:run"
     payload = {
@@ -434,14 +463,22 @@ if "current_nav" not in st.session_state:
 if "selected_prompt" not in st.session_state:
     st.session_state.selected_prompt = None
 
+if "uploaded_doc_name" not in st.session_state:
+    st.session_state.uploaded_doc_name = None
+if "uploaded_doc_summary" not in st.session_state:
+    st.session_state.uploaded_doc_summary = None
+if "uploaded_doc_text" not in st.session_state:
+    st.session_state.uploaded_doc_text = None
+
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {
             "role": "assistant",
-            "content": "Hello! I am **INSIGHT AI**, your intelligent insurance analyst connected directly to Snowflake. Ask any analytical question to generate queries, extract metrics, and explore interactive charts.",
+            "content": "Hello! I am **INSIGHT AI**, your intelligent insurance analyst connected directly to Snowflake. You can ask analytical questions or upload policy documents, claim forms, and CSV datasets for instant AI synthesis.",
             "sql": None,
             "data": None,
             "thinking": None,
+            "attached_doc": None,
             "raw_payload": None
         }
     ]
@@ -484,28 +521,15 @@ st.markdown(f"""
 # Upgraded Enterprise Sidebar Design System
 # ---------------------------------------------------------
 with st.sidebar:
-    # 1. Brand Card & Live Telemetry Beacon
+    # 1. Brand Card
     st.markdown(f"""
         <div class="sidebar-brand-card">
             <div class="sidebar-brand-title">❄ INSIGHT AI</div>
-            <div style="font-size:0.78rem;color:#94A3B8;margin-bottom:8px;">Enterprise Intelligence Studio</div>
-            <div class="sidebar-beacon">
-                <span class="beacon-dot"></span>
-                <span>Live Persistent Session</span>
-            </div>
+            <div style="font-size:0.78rem;color:#94A3B8;">Insurance Intelligence Studio</div>
         </div>
     """, unsafe_allow_html=True)
 
-    # 2. Line of Business / Tenant Switcher
-    st.caption("🏢 LINE OF BUSINESS")
-    lob_selector = st.selectbox(
-        "Line of Business",
-        ["Property & Casualty (P&C)", "Health & Medical", "Commercial Lines", "Life Insurance"],
-        index=0,
-        label_visibility="collapsed"
-    )
-
-    # 3. Primary Navigation Groups
+    # 2. Primary Navigation Groups
     st.markdown('<div class="sidebar-section-header"><span>ANALYTICS & DISCOVERY</span></div>', unsafe_allow_html=True)
     
     nav_analytics = ["◈ Home", "◉ Ask AI", "⚡ Explore", "📊 Data"]
@@ -533,7 +557,7 @@ with st.sidebar:
 
     st.divider()
 
-    # 4. Cortex AI Engine Parameters
+    # 3. Cortex AI Engine Parameters
     st.markdown("### 🤖 Cortex AI Engine")
     selected_model = st.selectbox(
         "AI Engine Model",
@@ -547,7 +571,7 @@ with st.sidebar:
     with c_temp:
         auto_run_sql = st.checkbox("⚡ Auto-SQL", value=True, help="Automatically run generated SQL on Snowflake")
 
-    # 5. Global Timeframe Filter
+    # 4. Global Timeframe Filter
     st.markdown("### 📅 Global Timeframe")
     time_filter = st.selectbox(
         "Timeframe Filter",
@@ -556,7 +580,7 @@ with st.sidebar:
         label_visibility="collapsed"
     )
 
-    # 6. Live Session Telemetry Box
+    # 5. Live Session Telemetry Box
     st.markdown(f"""
         <div class="sidebar-telemetry-box">
             <div class="telemetry-row">
@@ -582,11 +606,14 @@ with st.sidebar:
         </div>
     """, unsafe_allow_html=True)
 
-    # 7. Quick Actions & User Footer
+    # 6. Quick Actions & User Footer
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🧹 Clear Chat History", use_container_width=True):
         st.session_state.messages = []
         st.session_state.selected_prompt = None
+        st.session_state.uploaded_doc_name = None
+        st.session_state.uploaded_doc_summary = None
+        st.session_state.uploaded_doc_text = None
         st.rerun()
 
     st.markdown(f"""
@@ -608,6 +635,10 @@ def render_assistant_response(msg_dict, msg_key_prefix=""):
     sql_query = msg_dict.get("sql")
     query_data = msg_dict.get("data")
     thinking = msg_dict.get("thinking")
+    attached_doc = msg_dict.get("attached_doc")
+
+    if attached_doc:
+        st.markdown(f'<div class="attached-file-badge">📎 Context: {attached_doc}</div>', unsafe_allow_html=True)
 
     if thinking and thinking.strip():
         with st.expander("💭 Thought for a few seconds", expanded=False):
@@ -694,12 +725,48 @@ if st.session_state.current_nav == "◈ Home":
     st.markdown(f'<div class="greeting-title">{greeting}, {current_user}</div>', unsafe_allow_html=True)
     st.markdown('<div class="greeting-sub">What would you like to investigate?</div>', unsafe_allow_html=True)
 
-    # Investigation Search Box
-    col_search, col_btn = st.columns([6, 1])
+    # Render active document attachment chip if attached (ChatGPT style)
+    if st.session_state.uploaded_doc_name:
+        col_chip, col_del = st.columns([9, 2])
+        with col_chip:
+            st.markdown(f"""
+                <div class="chatgpt-file-chip">
+                    <span class="chatgpt-file-icon">📄</span>
+                    <div>
+                        <div class="chatgpt-file-name">{st.session_state.uploaded_doc_name}</div>
+                        <div class="chatgpt-file-meta">{st.session_state.uploaded_doc_summary or 'Document context attached'}</div>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+        with col_del:
+            if st.button("✖ Remove File", key="btn_discard_home_chip", use_container_width=True):
+                st.session_state.uploaded_doc_name = None
+                st.session_state.uploaded_doc_summary = None
+                st.session_state.uploaded_doc_text = None
+                st.rerun()
+
+    # Investigation Search Box (ChatGPT style: [📎] [Search Field] [🚀 Investigate])
+    col_attach, col_search, col_btn = st.columns([0.6, 5.4, 1.2])
+    with col_attach:
+        with st.popover("📎", help="Attach Policy PDF, Claim Form, or CSV dataset"):
+            st.markdown("**Attach File for AI Context**")
+            home_up = st.file_uploader(
+                "Upload document",
+                type=["pdf", "csv", "xlsx", "xls", "txt", "json", "png", "jpg", "jpeg"],
+                key="home_left_popover_uploader",
+                label_visibility="collapsed"
+            )
+            if home_up is not None:
+                summary, content = extract_uploaded_file_content(home_up)
+                st.session_state.uploaded_doc_name = home_up.name
+                st.session_state.uploaded_doc_summary = summary
+                st.session_state.uploaded_doc_text = content
+                st.rerun()
+
     with col_search:
         home_query = st.text_input(
             "Ask anything about your insurance data...",
-            placeholder="Ask anything about your insurance data... (e.g. Show claims by policy type)",
+            placeholder="Ask anything about your insurance data or attached file...",
             label_visibility="collapsed",
             key="home_search_input"
         )
@@ -799,11 +866,50 @@ if st.session_state.current_nav == "◈ Home":
 
 
 # ---------------------------------------------------------
-# VIEW 2: ◉ ASK AI (Cortex Conversational Studio)
+# VIEW 2: ◉ ASK AI (Cortex Conversational Studio + File Upload)
 # ---------------------------------------------------------
 elif st.session_state.current_nav == "◉ Ask AI":
     st.markdown("## ◉ Snowflake Cortex AI Studio")
     st.caption(f"Querying `{current_db}.{current_sh}` with model `{selected_model}` via persistent connection.")
+
+    # Render active document attachment chip if attached (ChatGPT style)
+    if st.session_state.uploaded_doc_name:
+        col_chip, col_del = st.columns([9, 2])
+        with col_chip:
+            st.markdown(f"""
+                <div class="chatgpt-file-chip">
+                    <span class="chatgpt-file-icon">📄</span>
+                    <div>
+                        <div class="chatgpt-file-name">{st.session_state.uploaded_doc_name}</div>
+                        <div class="chatgpt-file-meta">{st.session_state.uploaded_doc_summary or 'Document context attached'}</div>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+        with col_del:
+            if st.button("✖ Remove File", key="btn_discard_attached_chip", use_container_width=True):
+                st.session_state.uploaded_doc_name = None
+                st.session_state.uploaded_doc_summary = None
+                st.session_state.uploaded_doc_text = None
+                st.rerun()
+
+    # Left Attachment Popover (like ChatGPT)
+    c_attach_btn, c_spacer = st.columns([2, 10])
+    with c_attach_btn:
+        with st.popover("📎 Attach File / Document", help="Attach Claim Document, Policy PDF, or Dataset to query"):
+            st.markdown("**Attach File for AI Analysis**")
+            st.caption("Supported: PDF, CSV, Excel, TXT, JSON, Images")
+            agent_up = st.file_uploader(
+                "Upload document",
+                type=["pdf", "csv", "xlsx", "xls", "txt", "json", "png", "jpg", "jpeg"],
+                key="ask_ai_left_popover_uploader",
+                label_visibility="collapsed"
+            )
+            if agent_up is not None:
+                summary, content = extract_uploaded_file_content(agent_up)
+                st.session_state.uploaded_doc_name = agent_up.name
+                st.session_state.uploaded_doc_summary = summary
+                st.session_state.uploaded_doc_text = content
+                st.rerun()
     
     # Render Conversation History
     for idx, message in enumerate(st.session_state.messages):
@@ -814,13 +920,32 @@ elif st.session_state.current_nav == "◉ Ask AI":
                 st.markdown(message["content"])
 
     # User Input
-    chat_val = st.chat_input(f"Ask Cortex Agent {current_agent}...")
+    chat_val = st.chat_input(f"Ask Cortex Agent {current_agent} (with attached file or database inquiry)...")
     user_prompt = chat_val or st.session_state.selected_prompt
 
     if user_prompt:
         st.session_state.selected_prompt = None
-        st.session_state.messages.append({"role": "user", "content": user_prompt})
+        
+        # Check if an attachment should be merged into prompt
+        attached_doc_label = st.session_state.uploaded_doc_name
+        if st.session_state.uploaded_doc_text:
+            combined_prompt = f"""[ATTACHED CONTEXT - {st.session_state.uploaded_doc_summary}]:
+{st.session_state.uploaded_doc_text}
+
+[USER QUESTION / INSTRUCTION]:
+{user_prompt}"""
+        else:
+            combined_prompt = user_prompt
+
+        st.session_state.messages.append({
+            "role": "user",
+            "content": user_prompt,
+            "attached_doc": attached_doc_label
+        })
+        
         with st.chat_message("user"):
+            if attached_doc_label:
+                st.markdown(f'<div class="attached-file-badge">📎 Attached: {attached_doc_label}</div>', unsafe_allow_html=True)
             st.markdown(user_prompt)
 
         with st.chat_message("assistant"):
@@ -836,7 +961,7 @@ elif st.session_state.current_nav == "◉ Ask AI":
                 db=current_db,
                 schema=current_sh,
                 agent=current_agent,
-                prompt=user_prompt,
+                prompt=combined_prompt,
                 model=selected_model
             )
 
@@ -854,6 +979,7 @@ elif st.session_state.current_nav == "◉ Ask AI":
                 "sql": sql_query,
                 "data": query_data,
                 "thinking": thinking,
+                "attached_doc": attached_doc_label,
                 "raw_payload": debug_info
             }
 
