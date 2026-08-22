@@ -458,7 +458,7 @@ overview_data = fetch_overview_metrics(API_BASE_URL)
 
 
 # ---------------------------------------------------------
-# Top Navbar Header (Brand, Search, Alerts, Dynamic User)
+# Top Navbar Header (Clean & Minimalist: Brand + Dynamic User)
 # ---------------------------------------------------------
 user_initial = current_user[0].upper() if current_user else "U"
 
@@ -466,11 +466,8 @@ st.markdown(f"""
     <div class="top-navbar">
         <div class="brand-container">
             <span class="brand-logo">❄ INSIGHT AI</span>
-            <span class="brand-badge">Snowflake {current_wh}</span>
         </div>
         <div class="header-actions">
-            <div class="header-icon-btn">🔍 Global Search <span style="font-size:0.75rem;opacity:0.6;">(⌘K)</span></div>
-            <div class="header-icon-btn">🔔 Alerts <span style="color:#F59E0B;font-weight:700;">(3)</span></div>
             <div class="user-pill">
                 <div class="user-avatar">{user_initial}</div>
                 <div>
@@ -509,7 +506,7 @@ with st.sidebar:
     )
 
     # 3. Primary Navigation Groups
-    st.markdown('<div class="sidebar-section-header"><span>ANALYTICS & DISCOVERY</span><span class="sidebar-pill-badge badge-cyan">4</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-section-header"><span>ANALYTICS & DISCOVERY</span></div>', unsafe_allow_html=True)
     
     nav_analytics = ["◈ Home", "◉ Ask AI", "⚡ Explore", "📊 Data"]
     for nav_item in nav_analytics:
@@ -519,13 +516,12 @@ with st.sidebar:
             st.session_state.current_nav = nav_item
             st.rerun()
 
-    st.markdown('<div class="sidebar-section-header"><span>GOVERNANCE & TRUST</span><span class="sidebar-pill-badge badge-orange">3 Alerts</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-section-header"><span>GOVERNANCE & TRUST</span></div>', unsafe_allow_html=True)
     nav_gov = ["🛡 Quality", "🚨 Incidents", "📄 Docs"]
     for nav_item in nav_gov:
         is_active = (st.session_state.current_nav == nav_item)
         btn_type = "primary" if is_active else "secondary"
-        label = nav_item + (" (83%)" if nav_item == "🛡 Quality" else " (3)" if nav_item == "🚨 Incidents" else "")
-        if st.button(label, key=f"btn_nav_{nav_item}", use_container_width=True, type=btn_type):
+        if st.button(nav_item, key=f"btn_nav_{nav_item}", use_container_width=True, type=btn_type):
             st.session_state.current_nav = nav_item
             st.rerun()
 
