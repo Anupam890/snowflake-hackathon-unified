@@ -22,7 +22,7 @@ API_BASE_URL = env_config.get("API_URL", "http://127.0.0.1:8001")
 # Premium Custom CSS Design System
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -33,12 +33,12 @@ st.markdown("""
         display: flex;
         align-items: center;
         justify-content: space-between;
-        background: linear-gradient(90deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.9) 100%);
-        border: 1px solid rgba(56, 189, 248, 0.15);
+        background: linear-gradient(90deg, rgba(11, 17, 32, 0.96) 0%, rgba(22, 33, 56, 0.92) 100%);
+        border: 1px solid rgba(56, 189, 248, 0.2);
         border-radius: 12px;
         padding: 12px 24px;
         margin-bottom: 24px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
     }
     .brand-container {
         display: flex;
@@ -46,7 +46,7 @@ st.markdown("""
         gap: 12px;
     }
     .brand-logo {
-        font-size: 1.45rem;
+        font-size: 1.5rem;
         font-weight: 800;
         letter-spacing: -0.5px;
         background: linear-gradient(135deg, #38BDF8 0%, #00D4B2 100%);
@@ -54,28 +54,28 @@ st.markdown("""
         -webkit-text-fill-color: transparent;
     }
     .brand-badge {
-        background: rgba(56, 189, 248, 0.1);
+        background: rgba(56, 189, 248, 0.12);
         color: #38BDF8;
-        border: 1px solid rgba(56, 189, 248, 0.3);
+        border: 1px solid rgba(56, 189, 248, 0.35);
         padding: 3px 10px;
         border-radius: 20px;
         font-size: 0.75rem;
-        font-weight: 600;
+        font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
     .header-actions {
         display: flex;
         align-items: center;
-        gap: 16px;
+        gap: 14px;
     }
     .header-icon-btn {
-        background: rgba(30, 41, 59, 0.6);
-        border: 1px solid rgba(148, 163, 184, 0.2);
+        background: rgba(30, 41, 59, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.25);
         color: #94A3B8;
         border-radius: 8px;
         padding: 6px 12px;
-        font-size: 0.9rem;
+        font-size: 0.88rem;
         display: flex;
         align-items: center;
         gap: 6px;
@@ -84,22 +84,23 @@ st.markdown("""
         display: flex;
         align-items: center;
         gap: 10px;
-        background: rgba(14, 165, 233, 0.12);
-        border: 1px solid rgba(14, 165, 233, 0.35);
+        background: rgba(14, 165, 233, 0.15);
+        border: 1px solid rgba(14, 165, 233, 0.4);
         padding: 5px 14px;
         border-radius: 30px;
     }
     .user-avatar {
-        width: 26px;
-        height: 26px;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
         background: linear-gradient(135deg, #0284C7 0%, #0D9488 100%);
         color: #FFFFFF;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 0.78rem;
+        font-size: 0.82rem;
         font-weight: 700;
+        box-shadow: 0 0 10px rgba(14, 165, 233, 0.5);
     }
     .user-name-text {
         color: #F1F5F9;
@@ -112,13 +113,124 @@ st.markdown("""
         font-weight: 500;
     }
 
+    /* Modern Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #080C15 !important;
+        border-right: 1px solid rgba(148, 163, 184, 0.12) !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] {
+        display: none !important;
+    }
+    .sidebar-brand-card {
+        background: linear-gradient(145deg, rgba(30, 41, 59, 0.6) 0%, rgba(15, 23, 42, 0.9) 100%);
+        border: 1px solid rgba(56, 189, 248, 0.25);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 18px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    }
+    .sidebar-brand-title {
+        font-size: 1.25rem;
+        font-weight: 800;
+        background: linear-gradient(135deg, #38BDF8 0%, #00D4B2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: -0.3px;
+        margin-bottom: 4px;
+    }
+    .sidebar-beacon {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.76rem;
+        color: #34D399;
+        font-weight: 600;
+        background: rgba(16, 185, 129, 0.12);
+        padding: 3px 8px;
+        border-radius: 12px;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .beacon-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background-color: #34D399;
+        box-shadow: 0 0 8px #34D399;
+        animation: pulseBeacon 2s infinite ease-in-out;
+    }
+    @keyframes pulseBeacon {
+        0% { transform: scale(0.9); opacity: 0.7; }
+        50% { transform: scale(1.3); opacity: 1; }
+        100% { transform: scale(0.9); opacity: 0.7; }
+    }
+    .sidebar-section-header {
+        font-size: 0.72rem;
+        font-weight: 800;
+        color: #64748B;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-top: 18px;
+        margin-bottom: 8px;
+        padding-left: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .sidebar-pill-badge {
+        font-size: 0.68rem;
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-weight: 700;
+    }
+    .badge-orange {
+        background: rgba(249, 115, 22, 0.18);
+        color: #FB923C;
+        border: 1px solid rgba(249, 115, 22, 0.4);
+    }
+    .badge-cyan {
+        background: rgba(6, 182, 212, 0.18);
+        color: #22D3EE;
+        border: 1px solid rgba(6, 182, 212, 0.4);
+    }
+    .sidebar-telemetry-box {
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.15);
+        border-radius: 10px;
+        padding: 12px;
+        margin-top: 14px;
+        font-size: 0.8rem;
+        color: #94A3B8;
+    }
+    .telemetry-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+    }
+    .telemetry-val {
+        color: #F1F5F9;
+        font-weight: 600;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.78rem;
+    }
+    .sidebar-user-footer {
+        background: linear-gradient(145deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.8) 100%);
+        border: 1px solid rgba(56, 189, 248, 0.2);
+        border-radius: 10px;
+        padding: 12px;
+        margin-top: 18px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
     /* Greeting Section */
     .greeting-title {
-        font-size: 2.1rem;
-        font-weight: 700;
+        font-size: 2.15rem;
+        font-weight: 800;
         color: #F8FAFC;
         margin-bottom: 4px;
-        letter-spacing: -0.5px;
+        letter-spacing: -0.6px;
     }
     .greeting-sub {
         font-size: 1.12rem;
@@ -126,11 +238,6 @@ st.markdown("""
         margin-bottom: 24px;
     }
 
-    /* Search & Investigation Bar */
-    .search-wrapper {
-        margin-bottom: 22px;
-    }
-    
     /* Suggested Pills */
     .suggested-label {
         font-size: 0.88rem;
@@ -362,7 +469,7 @@ st.markdown(f"""
             <span class="brand-badge">Snowflake {current_wh}</span>
         </div>
         <div class="header-actions">
-            <div class="header-icon-btn">🔍 Global Search</div>
+            <div class="header-icon-btn">🔍 Global Search <span style="font-size:0.75rem;opacity:0.6;">(⌘K)</span></div>
             <div class="header-icon-btn">🔔 Alerts <span style="color:#F59E0B;font-weight:700;">(3)</span></div>
             <div class="user-pill">
                 <div class="user-avatar">{user_initial}</div>
@@ -377,44 +484,124 @@ st.markdown(f"""
 
 
 # ---------------------------------------------------------
-# Sidebar Navigation & Workspace Controls
+# Upgraded Enterprise Sidebar Design System
 # ---------------------------------------------------------
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/f/ff/Snowflake_Inc._logo.svg", width=140)
-    st.caption(f"Connected: `{current_db}.{current_sh}`")
-    st.divider()
-    
-    nav_options = [
-        "◈ Home",
-        "◉ Ask AI",
-        "⚡ Explore",
-        "📊 Data",
-        "📄 Docs",
-        "🛡 Quality",
-        "🚨 Incidents",
-        "⚙ Settings"
-    ]
-    
-    selected_nav = st.radio(
-        "Navigation",
-        nav_options,
-        index=nav_options.index(st.session_state.current_nav) if st.session_state.current_nav in nav_options else 0,
+    # 1. Brand Card & Live Telemetry Beacon
+    st.markdown(f"""
+        <div class="sidebar-brand-card">
+            <div class="sidebar-brand-title">❄ INSIGHT AI</div>
+            <div style="font-size:0.78rem;color:#94A3B8;margin-bottom:8px;">Enterprise Intelligence Studio</div>
+            <div class="sidebar-beacon">
+                <span class="beacon-dot"></span>
+                <span>Live Persistent Session</span>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # 2. Line of Business / Tenant Switcher
+    st.caption("🏢 LINE OF BUSINESS")
+    lob_selector = st.selectbox(
+        "Line of Business",
+        ["Property & Casualty (P&C)", "Health & Medical", "Commercial Lines", "Life Insurance"],
+        index=0,
         label_visibility="collapsed"
     )
-    st.session_state.current_nav = selected_nav
+
+    # 3. Primary Navigation Groups
+    st.markdown('<div class="sidebar-section-header"><span>ANALYTICS & DISCOVERY</span><span class="sidebar-pill-badge badge-cyan">4</span></div>', unsafe_allow_html=True)
+    
+    nav_analytics = ["◈ Home", "◉ Ask AI", "⚡ Explore", "📊 Data"]
+    for nav_item in nav_analytics:
+        is_active = (st.session_state.current_nav == nav_item)
+        btn_type = "primary" if is_active else "secondary"
+        if st.button(nav_item, key=f"btn_nav_{nav_item}", use_container_width=True, type=btn_type):
+            st.session_state.current_nav = nav_item
+            st.rerun()
+
+    st.markdown('<div class="sidebar-section-header"><span>GOVERNANCE & TRUST</span><span class="sidebar-pill-badge badge-orange">3 Alerts</span></div>', unsafe_allow_html=True)
+    nav_gov = ["🛡 Quality", "🚨 Incidents", "📄 Docs"]
+    for nav_item in nav_gov:
+        is_active = (st.session_state.current_nav == nav_item)
+        btn_type = "primary" if is_active else "secondary"
+        label = nav_item + (" (83%)" if nav_item == "🛡 Quality" else " (3)" if nav_item == "🚨 Incidents" else "")
+        if st.button(label, key=f"btn_nav_{nav_item}", use_container_width=True, type=btn_type):
+            st.session_state.current_nav = nav_item
+            st.rerun()
+
+    st.markdown('<div class="sidebar-section-header"><span>SYSTEM</span></div>', unsafe_allow_html=True)
+    is_settings_active = (st.session_state.current_nav == "⚙ Settings")
+    if st.button("⚙ Settings", key="btn_nav_settings", use_container_width=True, type="primary" if is_settings_active else "secondary"):
+        st.session_state.current_nav = "⚙ Settings"
+        st.rerun()
 
     st.divider()
-    st.markdown("### 🤖 Cortex Model")
+
+    # 4. Cortex AI Engine Parameters
+    st.markdown("### 🤖 Cortex AI Engine")
     selected_model = st.selectbox(
-        "AI Engine",
+        "AI Engine Model",
         ["claude-3-5-sonnet", "llama3.1-70b", "snowflake-arctic"],
         index=0
     )
     
+    c_think, c_temp = st.columns(2)
+    with c_think:
+        enable_reasoning = st.checkbox("🧠 Reasoning", value=True, help="Enable step-by-step thinking tokens")
+    with c_temp:
+        auto_run_sql = st.checkbox("⚡ Auto-SQL", value=True, help="Automatically run generated SQL on Snowflake")
+
+    # 5. Global Timeframe Filter
+    st.markdown("### 📅 Global Timeframe")
+    time_filter = st.selectbox(
+        "Timeframe Filter",
+        ["FY2024 YTD", "Last 90 Days", "Last 30 Days", "All Time Historical"],
+        index=0,
+        label_visibility="collapsed"
+    )
+
+    # 6. Live Session Telemetry Box
+    st.markdown(f"""
+        <div class="sidebar-telemetry-box">
+            <div class="telemetry-row">
+                <span>Warehouse:</span>
+                <span class="telemetry-val">{current_wh}</span>
+            </div>
+            <div class="telemetry-row">
+                <span>Database:</span>
+                <span class="telemetry-val">{current_db}</span>
+            </div>
+            <div class="telemetry-row">
+                <span>Schema:</span>
+                <span class="telemetry-val">{current_sh}</span>
+            </div>
+            <div class="telemetry-row">
+                <span>Security:</span>
+                <span class="telemetry-val" style="color:#34D399;">🔒 MFA Cached</span>
+            </div>
+            <div class="telemetry-row" style="margin-bottom:0;">
+                <span>Heartbeat:</span>
+                <span class="telemetry-val" style="color:#38BDF8;">Active (10m)</span>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # 7. Quick Actions & User Footer
+    st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🧹 Clear Chat History", use_container_width=True):
         st.session_state.messages = []
         st.session_state.selected_prompt = None
         st.rerun()
+
+    st.markdown(f"""
+        <div class="sidebar-user-footer">
+            <div class="user-avatar">{user_initial}</div>
+            <div style="flex:1;">
+                <div class="user-name-text">{current_user}</div>
+                <div class="user-role-badge">{current_role} • Online</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------
