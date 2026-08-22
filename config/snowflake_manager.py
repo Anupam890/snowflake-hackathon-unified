@@ -5,6 +5,12 @@ import threading
 from typing import Optional, List, Dict, Any, Tuple
 from dotenv import dotenv_values
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 # Ensure project root is in sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if PROJECT_ROOT not in sys.path:
@@ -38,6 +44,11 @@ class SnowflakeManager:
         self._token: Optional[str] = None
         self._host: Optional[str] = None
         self._version: Optional[str] = None
+        self._current_user: Optional[str] = self.env.get("SNOWFLAKE_USERNAME", "UNIFIEDAI")
+        self._current_role: Optional[str] = self.env.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN")
+        self._current_warehouse: Optional[str] = self.env.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH")
+        self._current_database: Optional[str] = self.env.get("SNOWFLAKE_DB", "INSURANCE_MGMT_SYSTEM")
+        self._current_schema: Optional[str] = self.env.get("SNOWFLAKE_SH", "HACKATHON_SH")
         self._lock = threading.RLock()
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._stop_heartbeat = threading.Event()
@@ -95,17 +106,24 @@ class SnowflakeManager:
                     }
                 )
 
-                # Test connection & cache version
+                # Test connection & cache version and session context
                 cur = self._conn.cursor()
-                cur.execute("SELECT CURRENT_VERSION()")
-                self._version = cur.fetchone()[0]
+                cur.execute("SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_VERSION();")
+                row = cur.fetchone()
+                if row:
+                    self._current_user = row[0] or user
+                    self._current_role = row[1] or role
+                    self._current_warehouse = row[2] or warehouse
+                    self._current_database = row[3] or database
+                    self._current_schema = row[4] or schema
+                    self._version = row[5]
                 cur.close()
 
                 # Cache REST session token for Cortex REST API calls
                 if hasattr(self._conn, "rest") and hasattr(self._conn.rest, "token"):
                     self._token = self._conn.rest.token
 
-                print(f"[SnowflakeManager] Persistent connection active (Snowflake v{self._version})")
+                print(f"[SnowflakeManager] Persistent connection active (User: {self._current_user}, Role: {self._current_role}, Snowflake v{self._version})")
                 
                 # Start background heartbeat to keep session alive
                 self._start_heartbeat()
@@ -154,6 +172,22 @@ class SnowflakeManager:
                 self._token = self._conn.rest.token
             
             return self._token, self._host
+
+    def get_session_context(self) -> Dict[str, Any]:
+        """Returns the cached Snowflake session context information."""
+        with self._lock:
+            is_ok = self.is_connected()
+            return {
+                "connected": is_ok,
+                "user": self._current_user or self.env.get("SNOWFLAKE_USERNAME", "UNIFIEDAI"),
+                "role": self._current_role or self.env.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
+                "warehouse": self._current_warehouse or self.env.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
+                "database": self._current_database or self.env.get("SNOWFLAKE_DB", "INSURANCE_MGMT_SYSTEM"),
+                "schema": self._current_schema or self.env.get("SNOWFLAKE_SH", "HACKATHON_SH"),
+                "version": self._version,
+                "account": self.env.get("SNOWFLAKE_ACCOUNT", ""),
+                "host": self._host
+            }
 
     def execute_query(self, sql: str) -> Tuple[Optional[List[Dict[str, Any]]], Optional[List[str]]]:
         """
