@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List, Union
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from dotenv import dotenv_values
 import uvicorn
 
@@ -83,8 +83,7 @@ class CortexAgentRunResponse(BaseModel):
     warnings: Optional[List[Dict[str, Any]]] = None
     metadata: Optional[Dict[str, Any]] = None
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 def extract_sql_from_text(text: str) -> Optional[str]:
