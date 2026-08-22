@@ -1,24 +1,26 @@
-import snowflake.connector
+"""
+Snowflake Connection Smoke Test.
+Uses the persistent singleton SnowflakeManager.
+"""
 import os
+import sys
 
-# Establish connection
-conn = snowflake.connector.connect(
-user=os.getenv("SNOWFLAKE_USERNAME"),
-password=os.getenv("SNOWFLAKE_PASSWORD"),
-account=os.getenv("SNOWFLAKE_ACCOUNT"),
-warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
-database=od.getenv("SNOWFLAKE_DB"),
-schema=os.getenv("SNOWFLAKE_SH"),
-session_parameters={
-"CLIENT_TELEMETRY_ENABLED": False # Optional: disable telemetry
-})
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-# Create a cursor and execute a query
-cur = conn.cursor()
-try:
-    cur.execute("SELECT CURRENT_VERSION()")
-    result = cur.fetchone()
-    print(f"Snowflake version: {result[0]}")
-finally:
-    cur.close()
-    conn.close()
+from config.snowflake_manager import snowflake_manager
+
+def get_connection():
+    """Returns the persistent singleton Snowflake connection."""
+    return snowflake_manager.get_connection()
+
+if __name__ == "__main__":
+    print("Testing persistent Snowflake connection setup...")
+    if snowflake_manager.is_connected():
+        print(f"Connected to Snowflake successfully!")
+        records, cols = snowflake_manager.execute_query("SELECT CURRENT_VERSION(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_SCHEMA();")
+        if records:
+            print("Session Details:", records[0])
+    else:
+        print("Failed to connect. Please check your .env configuration.")
