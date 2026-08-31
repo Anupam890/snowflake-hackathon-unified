@@ -1,23 +1,43 @@
-import streamlit as st
+import os
+import sys
 import json
 import datetime
 import requests
 import pandas as pd
 from dotenv import dotenv_values
+import streamlit as st
 
 # ---------------------------------------------------------
 # Page Configuration & Styling
 # ---------------------------------------------------------
-st.set_page_config(
-    page_title="❄ INSIGHT AI — Insurance Intelligence Studio",
-    page_icon="❄️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+try:
+    st.set_page_config(
+        page_title="❄ INSIGHT AI — Insurance Intelligence Studio",
+        page_icon="❄️",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+except Exception:
+    pass
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from config.snowflake_manager import get_st_cached_snowflake_manager
+from services.server_manager import ensure_backend_server
+import services.backend_service as backend_service
 
 # Load environment configuration
-env_config = {k.strip(): v.strip() for k, v in dotenv_values('.env').items()}
+env_config = {k.strip(): v.strip() for k, v in dotenv_values(os.path.join(PROJECT_ROOT, '.env')).items()}
 API_BASE_URL = env_config.get("API_URL", "http://127.0.0.1:8001")
+
+# Auto-start backend in background daemon thread (single-command unified startup)
+ensure_backend_server()
+
+# Get persistent cached Snowflake manager (reused across all reruns, avoiding Duo prompts)
+cached_sf_mgr = get_st_cached_snowflake_manager()
 
 # Premium Custom CSS Design System
 st.markdown("""
@@ -327,16 +347,20 @@ st.markdown("""
 
 
 # ---------------------------------------------------------
-# Helper Functions & API Clients
+# Helper Functions & API Clients (Persistent In-Process & Fallback)
 # ---------------------------------------------------------
-@st.cache_data(ttl=15)
-def fetch_snowflake_status(base_url: str):
+@st.cache_data(ttl=25)
+def fetch_snowflake_status(base_url: str = API_BASE_URL):
     try:
-        res = requests.get(f"{base_url}/api/snowflake/status", timeout=4)
-        if res.status_code == 200:
-            return res.json()
+        # In-process session check with persistent session manager
+        return backend_service.get_snowflake_status(mgr=cached_sf_mgr)
     except Exception:
-        pass
+        try:
+            res = requests.get(f"{base_url}/api/snowflake/status", timeout=4)
+            if res.status_code == 200:
+                return res.json()
+        except Exception:
+            pass
     return {
         "connected": True,
         "user": env_config.get("SNOWFLAKE_USERNAME", "UNIFIEDAI"),
@@ -348,14 +372,18 @@ def fetch_snowflake_status(base_url: str):
     }
 
 
-@st.cache_data(ttl=20)
-def fetch_overview_metrics(base_url: str):
+@st.cache_data(ttl=30)
+def fetch_overview_metrics(base_url: str = API_BASE_URL):
     try:
-        res = requests.get(f"{base_url}/api/overview", timeout=4)
-        if res.status_code == 200:
-            return res.json()
+        # In-process query execution reusing active Snowflake session
+        return backend_service.get_dashboard_overview(mgr=cached_sf_mgr)
     except Exception:
-        pass
+        try:
+            res = requests.get(f"{base_url}/api/overview", timeout=4)
+            if res.status_code == 200:
+                return res.json()
+        except Exception:
+            pass
     return {
         "claims_count": 400,
         "claims_amount": 15024703.0,
@@ -431,6 +459,22 @@ def call_cortex_agent(base_url: str, db: str, schema: str, agent: str, prompt: s
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
         "prompt": prompt
     }
+    
+    # 1. Direct in-process execution reusing persistent session (avoids network latency & repeated Duo MFA)
+    try:
+        result = backend_service.execute_cortex_agent_workflow(
+            db=db,
+            schema=schema,
+            agent=agent,
+            prompt=prompt,
+            model=model,
+            mgr=cached_sf_mgr
+        )
+        return result, endpoint_url, payload
+    except Exception as inproc_err:
+        print(f"[Streamlit Call] In-process execution note: {inproc_err}. Falling back to REST API...")
+    
+    # 2. HTTP Fallback to Background FastAPI Server
     try:
         res = requests.post(endpoint_url, json=payload, timeout=65)
         if res.status_code == 200:
