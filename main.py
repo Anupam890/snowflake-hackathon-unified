@@ -452,60 +452,33 @@ def snowflake_status():
 
 
 @app.get("/api/overview")
-def get_dashboard_overview():
-    db = env_config.get("SNOWFLAKE_DB", "INSURANCE_MGMT_SYSTEM")
-    sql = f"""SELECT 
-        COUNT(p.POLICY_ID) AS TOTAL_POLICIES,
-        ROUND(SUM(p.PREMIUM_AMOUNT), 2) AS TOTAL_REVENUE,
-        ROUND(AVG(p.PREMIUM_AMOUNT), 2) AS AVG_PREMIUM,
-        (SELECT COUNT(CLAIM_ID) FROM {db}.CORE.CLAIMS) AS TOTAL_CLAIMS,
-        (SELECT ROUND(SUM(CLAIM_AMOUNT), 2) FROM {db}.CORE.CLAIMS) AS TOTAL_CLAIM_AMOUNT,
-        (SELECT ROUND(AVG(DAYS_TO_RESOLVE), 1) FROM {db}.CORE.CLAIMS) AS AVG_DAYS_TO_RESOLVE,
-        (SELECT COUNT(CLAIM_ID) FROM {db}.CORE.CLAIMS WHERE FRAUD_FLAG = TRUE OR FRAUD_SCORE >= 0.75) AS HIGH_RISK_CLAIMS
-    FROM {db}.CORE.POLICIES p;"""
-    
-    records, _ = snowflake_manager.execute_query(sql)
-    if records and len(records) > 0:
-        row = records[0]
-        return {
-            "status": "success",
-            "claims_count": row.get("TOTAL_CLAIMS", 400),
-            "claims_amount": row.get("TOTAL_CLAIM_AMOUNT", 15024703.0),
-            "claims_growth_pct": "+14.2%",
-            "revenue": row.get("TOTAL_REVENUE", 2210154.0),
-            "active_policies": row.get("TOTAL_POLICIES", 300),
-            "avg_premium": row.get("AVG_PREMIUM", 7367.18),
-            "data_trust_score": 83,
-            "avg_settlement_days": row.get("AVG_DAYS_TO_RESOLVE", 14.8),
-            "high_risk_count": row.get("HIGH_RISK_CLAIMS", 18)
-        }
-    return {
-        "status": "fallback",
-        "claims_count": 400,
-        "claims_amount": 15024703.0,
-        "claims_growth_pct": "+14.2%",
-        "revenue": 2210154.0,
-        "active_policies": 300,
-        "avg_premium": 7367.18,
-        "data_trust_score": 83,
-        "avg_settlement_days": 14.8,
-        "high_risk_count": 18
-    }
+def get_dashboard_overview(state: Optional[str] = None):
+    import services.backend_service as bs
+    return bs.get_dashboard_overview(mgr=snowflake_manager, state=state)
+
+
+@app.get("/api/analytics/dts")
+def get_dts_analytics():
+    import services.backend_service as bs
+    return bs.get_dts_analytics_data(mgr=snowflake_manager)
+
+
+@app.get("/api/analytics/risk-churn")
+def get_risk_churn_analytics(state: Optional[str] = None):
+    import services.backend_service as bs
+    return bs.get_risk_and_churn_analytics(mgr=snowflake_manager, state=state)
+
+
+@app.get("/api/analytics/geospatial")
+def get_geospatial_analytics():
+    import services.backend_service as bs
+    return bs.get_state_geospatial_analytics(mgr=snowflake_manager)
 
 
 @app.get("/api/tables")
 def get_tables_metadata():
-    db = env_config.get("SNOWFLAKE_DB", "INSURANCE_MGMT_SYSTEM")
-    return {
-        "database": db,
-        "schema": "CORE",
-        "tables": [
-            {"name": "POLICIES", "rows": 300, "columns": 15, "description": "Insurance policy master data, plan tiers, premiums, and loss ratios"},
-            {"name": "CUSTOMERS", "rows": 250, "columns": 12, "description": "Policyholder demographics, credit scores, geography, and income"},
-            {"name": "CLAIMS", "rows": 400, "columns": 13, "description": "Claims submissions, approval amounts, fraud scores, and resolution times"},
-            {"name": "AGENTS", "rows": 50, "columns": 8, "description": "Insurance distribution agents, regions, branches, and performance scores"}
-        ]
-    }
+    import services.backend_service as bs
+    return bs.get_tables_metadata(mgr=snowflake_manager)
 
 
 
