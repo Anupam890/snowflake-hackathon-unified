@@ -12,5 +12,10 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+import importlib
+if "services.backend_service" in sys.modules:
+    import services.backend_service
+    importlib.reload(services.backend_service)
+
 app_file = os.path.join(os.path.dirname(__file__), "streamlit_app.py")
 runpy.run_path(app_file, run_name="__main__")
