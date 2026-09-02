@@ -235,8 +235,8 @@ class SnowflakeManager:
         self._heartbeat_thread.start()
 
     def _heartbeat_loop(self):
-        """Pings Snowflake every 10 minutes to maintain persistent active session state."""
-        while not self._stop_heartbeat.wait(600):  # 10 minutes interval
+        """Pings Snowflake every 5 minutes to maintain persistent active session state and prevent Duo re-auth."""
+        while not self._stop_heartbeat.wait(300):  # 5 minutes interval
             with self._lock:
                 if self._conn and not self._conn.is_closed():
                     try:
@@ -262,3 +262,26 @@ class SnowflakeManager:
 
 # Global singleton instance
 snowflake_manager = SnowflakeManager()
+
+
+def get_snowflake_manager() -> SnowflakeManager:
+    """Returns the persistent SnowflakeManager singleton."""
+    return snowflake_manager
+
+
+def get_st_cached_snowflake_manager() -> SnowflakeManager:
+    """
+    Streamlit cache_resource wrapper. Guarantees that across all Streamlit
+    script reruns, page switches, and user interactions, the exact same
+    Snowflake session and connection object is reused without triggering Duo MFA.
+    """
+    try:
+        import streamlit as st
+        @st.cache_resource(show_spinner=False)
+        def _get_manager():
+            mgr = SnowflakeManager()
+            mgr.connect()
+            return mgr
+        return _get_manager()
+    except Exception:
+        return snowflake_manager
