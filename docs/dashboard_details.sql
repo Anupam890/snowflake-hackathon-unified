@@ -4,7 +4,7 @@
 -- ====================================================================================================
 -- Configure active database, schema, and compute warehouse
 USE DATABASE UNIFIEDAI_DB;
-USE SCHEMA UNIFIFEDAI_SH;
+USE SCHEMA UNIFIEDAI_SH;
 USE WAREHOUSE COMPUTE_WH;
 
 -- Verify active session context

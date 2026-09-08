@@ -20,29 +20,32 @@ from config.snowflake_manager import snowflake_manager, SnowflakeManager
 env_config = {k.strip(): v.strip() for k, v in dotenv_values(os.path.join(PROJECT_ROOT, '.env')).items()}
 
 SCHEMA_METADATA = """
-Database: INSURANCE_MGMT_SYSTEM, Schema: CORE
-Tables and Columns:
-1. INSURANCE_MGMT_SYSTEM.CORE.POLICIES (
-    POLICY_ID VARCHAR, CUSTOMER_ID VARCHAR, AGENT_ID VARCHAR, POLICY_TYPE VARCHAR,
-    PLAN_TIER VARCHAR, POLICY_STATUS VARCHAR, START_DATE DATE, END_DATE DATE,
-    PREMIUM_AMOUNT NUMBER(12,2), COVERAGE_AMOUNT NUMBER(14,2), DEDUCTIBLE NUMBER(10,2),
-    LOSS_RATIO FLOAT, PAYMENT_FREQUENCY VARCHAR, AUTO_RENEW BOOLEAN, UNDERWRITING_SCORE FLOAT
-)
-2. INSURANCE_MGMT_SYSTEM.CORE.CUSTOMERS (
-    CUSTOMER_ID VARCHAR, FIRST_NAME VARCHAR, LAST_NAME VARCHAR, AGE NUMBER,
-    GENDER VARCHAR, CITY VARCHAR, STATE VARCHAR, ZIP_CODE VARCHAR, OCCUPATION VARCHAR,
-    ANNUAL_INCOME NUMBER(12,2), CREDIT_SCORE NUMBER, SMOKING_STATUS VARCHAR, BMI FLOAT
-)
-3. INSURANCE_MGMT_SYSTEM.CORE.CLAIMS (
-    CLAIM_ID VARCHAR, POLICY_ID VARCHAR, CUSTOMER_ID VARCHAR, CLAIM_DATE DATE,
-    CLAIM_TYPE VARCHAR, CLAIM_STATUS VARCHAR, CLAIM_AMOUNT NUMBER(12,2),
-    APPROVED_AMOUNT NUMBER(12,2), FRAUD_FLAG BOOLEAN, FRAUD_SCORE FLOAT,
-    FRAUD_REASON VARCHAR, DAYS_TO_RESOLVE NUMBER, PRIORITY VARCHAR, ESCALATED BOOLEAN
-)
-4. INSURANCE_MGMT_SYSTEM.CORE.AGENTS (
-    AGENT_ID VARCHAR, AGENT_NAME VARCHAR, ROLE VARCHAR, REGION VARCHAR,
-    BRANCH VARCHAR, PERFORMANCE_SCORE FLOAT, ACTIVE_POLICIES_COUNT NUMBER, ACTIVE_FLAG BOOLEAN
-)
+Database: UNIFIEDAI_DB
+Schemas & Tables:
+
+1. UNIFIEDAI_DB.CORE:
+   - POLICIES (POLICY_ID VARCHAR, CUSTOMER_ID VARCHAR, AGENT_ID VARCHAR, POLICY_TYPE VARCHAR, PLAN_TIER VARCHAR, POLICY_STATUS VARCHAR, START_DATE DATE, END_DATE DATE, PREMIUM_AMOUNT NUMBER(12,2), COVERAGE_AMOUNT NUMBER(14,2), DEDUCTIBLE NUMBER(10,2), LOSS_RATIO FLOAT, PAYMENT_FREQUENCY VARCHAR, AUTO_RENEW BOOLEAN, UNDERWRITING_SCORE FLOAT)
+   - CUSTOMERS (CUSTOMER_ID VARCHAR, FIRST_NAME VARCHAR, LAST_NAME VARCHAR, DATE_OF_BIRTH DATE, AGE NUMBER, GENDER VARCHAR, MARITAL_STATUS VARCHAR, EMAIL VARCHAR, PHONE VARCHAR, ADDRESS VARCHAR, CITY VARCHAR, STATE VARCHAR, ZIP_CODE VARCHAR, OCCUPATION VARCHAR, ANNUAL_INCOME NUMBER(12,2), CREDIT_SCORE NUMBER, SMOKING_STATUS VARCHAR, BMI FLOAT, CUSTOMER_SINCE DATE)
+   - CLAIMS (CLAIM_ID VARCHAR, POLICY_ID VARCHAR, CUSTOMER_ID VARCHAR, CLAIM_DATE DATE, REPORTED_DATE DATE, CLAIM_TYPE VARCHAR, CLAIM_STATUS VARCHAR, CLAIM_AMOUNT NUMBER(12,2), APPROVED_AMOUNT NUMBER(12,2), FRAUD_FLAG BOOLEAN, FRAUD_SCORE FLOAT, FRAUD_REASON VARCHAR, ASSIGNED_ADJUSTER VARCHAR, RESOLUTION_DATE DATE, DAYS_TO_RESOLVE NUMBER, PRIORITY VARCHAR, ESCALATED BOOLEAN)
+   - AGENTS (AGENT_ID VARCHAR, AGENT_NAME VARCHAR, ROLE VARCHAR, REGION VARCHAR, BRANCH VARCHAR, PERFORMANCE_SCORE FLOAT, ACTIVE_POLICIES_COUNT NUMBER, ACTIVE_FLAG BOOLEAN)
+
+2. UNIFIEDAI_DB.ANALYTICS:
+   - CLAIMS_KPI (KPI_ID VARCHAR, MONTH_YEAR DATE, TOTAL_CLAIMS NUMBER, CLAIMS_APPROVED NUMBER, CLAIMS_DENIED NUMBER, CLAIMS_PENDING NUMBER, CLAIMS_ESCALATED NUMBER, APPROVAL_RATE FLOAT, AVG_PROCESSING_DAYS FLOAT, AVG_CLAIM_AMOUNT NUMBER(12,2), TOTAL_PAYOUT NUMBER(12,2), FRAUD_DETECTED NUMBER, CUSTOMER_SATISFACTION FLOAT)
+   - POLICY_TRENDS (TREND_ID VARCHAR, MONTH_YEAR DATE, POLICY_TYPE VARCHAR, NEW_POLICIES NUMBER, RENEWED_POLICIES NUMBER, CANCELLED_POLICIES NUMBER, ACTIVE_POLICIES NUMBER, TOTAL_PREMIUM_REVENUE NUMBER(14,2), AVG_PREMIUM NUMBER(10,2), RETENTION_RATE FLOAT, GROWTH_RATE FLOAT)
+   - LOSS_RATIO_HISTORY (RECORD_ID VARCHAR, POLICY_TYPE VARCHAR, PLAN_TIER VARCHAR, MONTH_YEAR DATE, PREMIUMS_EARNED NUMBER(14,2), CLAIMS_PAID NUMBER(14,2), LOSS_RATIO FLOAT, COMBINED_RATIO FLOAT, EXPENSE_RATIO FLOAT, TREND VARCHAR)
+   - FRAUD_ALERTS (ALERT_ID VARCHAR, CLAIM_ID VARCHAR, POLICY_ID VARCHAR, RISK_SCORE FLOAT, FRAUD_REASON VARCHAR, STATUS VARCHAR)
+
+3. UNIFIEDAI_DB.RISK:
+   - AT_RISK_POLICIES (RISK_ID VARCHAR, POLICY_ID VARCHAR, CUSTOMER_ID VARCHAR, POLICY_TYPE VARCHAR, RISK_CATEGORY VARCHAR, RISK_SCORE FLOAT, REVENUE_AT_RISK NUMBER(12,2), CHURN_PROBABILITY FLOAT, RISK_DRIVERS VARCHAR, LAST_INTERACTION_DATE DATE, DAYS_SINCE_CONTACT NUMBER, COMPLAINTS_COUNT NUMBER, MISSED_PAYMENTS NUMBER, RECOMMENDED_ACTION VARCHAR, PRIORITY VARCHAR)
+   - CHURN_PREDICTIONS (PREDICTION_ID VARCHAR, POLICY_ID VARCHAR, CUSTOMER_ID VARCHAR, PREDICTION_DATE DATE, CHURN_PROBABILITY FLOAT, CONFIDENCE_SCORE FLOAT, TOP_RISK_FACTOR VARCHAR, SECOND_RISK_FACTOR VARCHAR, PREDICTED_CHURN_DATE DATE, RETENTION_OFFER VARCHAR, OUTCOME VARCHAR)
+
+4. UNIFIEDAI_DB.PREMIUM:
+   - PLAN_TIERS (TIER_ID VARCHAR, TIER_NAME VARCHAR, BASE_RATE FLOAT, COVERAGE_LIMIT NUMBER(14,2), DEDUCTIBLE_OPTIONS VARCHAR)
+   - PREMIUM_CALCULATIONS (CALC_ID VARCHAR, POLICY_ID VARCHAR, BASE_PREMIUM NUMBER(12,2), RISK_ADJUSTMENT FLOAT, FINAL_PREMIUM NUMBER(12,2))
+
+5. UNIFIEDAI_DB.UNIFIEDAI_SH:
+   - DQ_RULES (RULE_ID VARCHAR, RULE_NAME VARCHAR, RULE_CATEGORY VARCHAR, TARGET_TABLE VARCHAR, TARGET_COLUMN VARCHAR, RULE_TYPE VARCHAR, RULE_EXPRESSION VARCHAR, THRESHOLD_PASS FLOAT, SEVERITY VARCHAR, OWNER VARCHAR, DESCRIPTION VARCHAR, ACTIVE_FLAG BOOLEAN)
+   - DQ_VALIDATION_RESULTS (RESULT_ID VARCHAR, RUN_ID VARCHAR, RULE_ID VARCHAR, TARGET_TABLE VARCHAR, TARGET_COLUMN VARCHAR, RECORD_ID VARCHAR, FAILED_VALUE VARCHAR, EXPECTED_VALUE VARCHAR, ERROR_DETAIL VARCHAR, SEVERITY VARCHAR, DETECTED_AT TIMESTAMP, RESOLVED_FLAG BOOLEAN)
 """
 
 
@@ -140,7 +143,6 @@ def get_state_geospatial_analytics(mgr: Optional[SnowflakeManager] = None) -> Li
     """
     manager = mgr or snowflake_manager
     db = env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
-    sh = env_config.get("SNOWFLAKE_SH", "UNIFIFEDAI_SH")
     
     sql_geo = f"""
     SELECT 
@@ -153,9 +155,9 @@ def get_state_geospatial_analytics(mgr: Optional[SnowflakeManager] = None) -> Li
         COUNT(DISTINCT cl.CLAIM_ID) AS CLAIMS_COUNT,
         ROUND(SUM(cl.CLAIM_AMOUNT), 2) AS TOTAL_CLAIMS_AMOUNT,
         ROUND(AVG(cl.FRAUD_SCORE), 2) AS AVG_FRAUD_SCORE
-    FROM {db}.{sh}.CUSTOMERS c
-    JOIN {db}.{sh}.POLICIES p ON c.CUSTOMER_ID = p.CUSTOMER_ID
-    LEFT JOIN {db}.{sh}.CLAIMS cl ON p.POLICY_ID = cl.POLICY_ID
+    FROM {db}.CORE.CUSTOMERS c
+    JOIN {db}.CORE.POLICIES p ON c.CUSTOMER_ID = p.CUSTOMER_ID
+    LEFT JOIN {db}.CORE.CLAIMS cl ON p.POLICY_ID = cl.POLICY_ID
     GROUP BY c.STATE
     ORDER BY TOTAL_PREMIUM DESC;
     """
@@ -208,7 +210,6 @@ def get_dashboard_overview(mgr: Optional[SnowflakeManager] = None, state: Option
     """Fetches real-time portfolio KPI metrics directly from live tables with optional state filtering."""
     manager = mgr or snowflake_manager
     db = env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
-    sh = env_config.get("SNOWFLAKE_SH", "UNIFIFEDAI_SH")
     
     if state and state.upper() not in ["ALL", "NATIONAL", "NONE"]:
         st_filter = f"WHERE c.STATE = '{state.upper()}'"
@@ -216,27 +217,27 @@ def get_dashboard_overview(mgr: Optional[SnowflakeManager] = None, state: Option
             COUNT(DISTINCT p.POLICY_ID) AS ACTIVE_POLICIES,
             ROUND(SUM(p.PREMIUM_AMOUNT), 2) AS TOTAL_REVENUE,
             ROUND(AVG(p.PREMIUM_AMOUNT), 2) AS AVG_PREMIUM,
-            (SELECT COUNT(DISTINCT cl.CLAIM_ID) FROM {db}.{sh}.CLAIMS cl JOIN {db}.{sh}.POLICIES p2 ON cl.POLICY_ID = p2.POLICY_ID JOIN {db}.{sh}.CUSTOMERS c2 ON p2.CUSTOMER_ID = c2.CUSTOMER_ID WHERE c2.STATE = '{state.upper()}') AS TOTAL_CLAIMS,
-            (SELECT ROUND(SUM(cl.CLAIM_AMOUNT), 2) FROM {db}.{sh}.CLAIMS cl JOIN {db}.{sh}.POLICIES p2 ON cl.POLICY_ID = p2.POLICY_ID JOIN {db}.{sh}.CUSTOMERS c2 ON p2.CUSTOMER_ID = c2.CUSTOMER_ID WHERE c2.STATE = '{state.upper()}') AS TOTAL_CLAIM_AMOUNT,
-            (SELECT ROUND(AVG(cl.DAYS_TO_RESOLVE), 1) FROM {db}.{sh}.CLAIMS cl JOIN {db}.{sh}.POLICIES p2 ON cl.POLICY_ID = p2.POLICY_ID JOIN {db}.{sh}.CUSTOMERS c2 ON p2.CUSTOMER_ID = c2.CUSTOMER_ID WHERE c2.STATE = '{state.upper()}') AS AVG_PROCESSING_DAYS,
-            (SELECT COUNT(DISTINCT cl.CLAIM_ID) FROM {db}.{sh}.CLAIMS cl JOIN {db}.{sh}.POLICIES p2 ON cl.POLICY_ID = p2.POLICY_ID JOIN {db}.{sh}.CUSTOMERS c2 ON p2.CUSTOMER_ID = c2.CUSTOMER_ID WHERE c2.STATE = '{state.upper()}' AND (cl.FRAUD_FLAG = TRUE OR cl.FRAUD_SCORE >= 0.75)) AS HIGH_RISK_COUNT,
-            (SELECT ROUND(AVG(CUSTOMER_SATISFACTION), 2) FROM {db}.{sh}.CLAIMS_KPI) AS CSAT_SCORE,
-            (SELECT ROUND(AVG(CUSTOMER_SATISFACTION) * 20.0, 1) FROM {db}.{sh}.CLAIMS_KPI) AS CSAT_PCT
-        FROM {db}.{sh}.POLICIES p
-        JOIN {db}.{sh}.CUSTOMERS c ON p.CUSTOMER_ID = c.CUSTOMER_ID
+            (SELECT COUNT(DISTINCT cl.CLAIM_ID) FROM {db}.CORE.CLAIMS cl JOIN {db}.CORE.POLICIES p2 ON cl.POLICY_ID = p2.POLICY_ID JOIN {db}.CORE.CUSTOMERS c2 ON p2.CUSTOMER_ID = c2.CUSTOMER_ID WHERE c2.STATE = '{state.upper()}') AS TOTAL_CLAIMS,
+            (SELECT ROUND(SUM(cl.CLAIM_AMOUNT), 2) FROM {db}.CORE.CLAIMS cl JOIN {db}.CORE.POLICIES p2 ON cl.POLICY_ID = p2.POLICY_ID JOIN {db}.CORE.CUSTOMERS c2 ON p2.CUSTOMER_ID = c2.CUSTOMER_ID WHERE c2.STATE = '{state.upper()}') AS TOTAL_CLAIM_AMOUNT,
+            (SELECT ROUND(AVG(cl.DAYS_TO_RESOLVE), 1) FROM {db}.CORE.CLAIMS cl JOIN {db}.CORE.POLICIES p2 ON cl.POLICY_ID = p2.POLICY_ID JOIN {db}.CORE.CUSTOMERS c2 ON p2.CUSTOMER_ID = c2.CUSTOMER_ID WHERE c2.STATE = '{state.upper()}') AS AVG_PROCESSING_DAYS,
+            (SELECT COUNT(DISTINCT cl.CLAIM_ID) FROM {db}.CORE.CLAIMS cl JOIN {db}.CORE.POLICIES p2 ON cl.POLICY_ID = p2.POLICY_ID JOIN {db}.CORE.CUSTOMERS c2 ON p2.CUSTOMER_ID = c2.CUSTOMER_ID WHERE c2.STATE = '{state.upper()}' AND (cl.FRAUD_FLAG = TRUE OR cl.FRAUD_SCORE >= 0.75)) AS HIGH_RISK_COUNT,
+            (SELECT ROUND(AVG(CUSTOMER_SATISFACTION), 2) FROM {db}.ANALYTICS.CLAIMS_KPI) AS CSAT_SCORE,
+            (SELECT ROUND(AVG(CUSTOMER_SATISFACTION) * 20.0, 1) FROM {db}.ANALYTICS.CLAIMS_KPI) AS CSAT_PCT
+        FROM {db}.CORE.POLICIES p
+        JOIN {db}.CORE.CUSTOMERS c ON p.CUSTOMER_ID = c.CUSTOMER_ID
         {st_filter};"""
     else:
         sql = f"""SELECT 
             COUNT(p.POLICY_ID) AS ACTIVE_POLICIES,
             ROUND(SUM(p.PREMIUM_AMOUNT), 2) AS TOTAL_REVENUE,
             ROUND(AVG(p.PREMIUM_AMOUNT), 2) AS AVG_PREMIUM,
-            (SELECT COUNT(CLAIM_ID) FROM {db}.{sh}.CLAIMS) AS TOTAL_CLAIMS,
-            (SELECT ROUND(SUM(CLAIM_AMOUNT), 2) FROM {db}.{sh}.CLAIMS) AS TOTAL_CLAIM_AMOUNT,
-            (SELECT ROUND(AVG(DAYS_TO_RESOLVE), 1) FROM {db}.{sh}.CLAIMS) AS AVG_PROCESSING_DAYS,
-            (SELECT COUNT(CLAIM_ID) FROM {db}.{sh}.CLAIMS WHERE FRAUD_FLAG = TRUE OR FRAUD_SCORE >= 0.75) AS HIGH_RISK_COUNT,
-            (SELECT ROUND(AVG(CUSTOMER_SATISFACTION), 2) FROM {db}.{sh}.CLAIMS_KPI) AS CSAT_SCORE,
-            (SELECT ROUND(AVG(CUSTOMER_SATISFACTION) * 20.0, 1) FROM {db}.{sh}.CLAIMS_KPI) AS CSAT_PCT
-        FROM {db}.{sh}.POLICIES p;"""
+            (SELECT COUNT(CLAIM_ID) FROM {db}.CORE.CLAIMS) AS TOTAL_CLAIMS,
+            (SELECT ROUND(SUM(CLAIM_AMOUNT), 2) FROM {db}.CORE.CLAIMS) AS TOTAL_CLAIM_AMOUNT,
+            (SELECT ROUND(AVG(DAYS_TO_RESOLVE), 1) FROM {db}.CORE.CLAIMS) AS AVG_PROCESSING_DAYS,
+            (SELECT COUNT(CLAIM_ID) FROM {db}.CORE.CLAIMS WHERE FRAUD_FLAG = TRUE OR FRAUD_SCORE >= 0.75) AS HIGH_RISK_COUNT,
+            (SELECT ROUND(AVG(CUSTOMER_SATISFACTION), 2) FROM {db}.ANALYTICS.CLAIMS_KPI) AS CSAT_SCORE,
+            (SELECT ROUND(AVG(CUSTOMER_SATISFACTION) * 20.0, 1) FROM {db}.ANALYTICS.CLAIMS_KPI) AS CSAT_PCT
+        FROM {db}.CORE.POLICIES p;"""
     
     records, _ = manager.execute_query(sql)
     row = records[0] if records else {}
@@ -272,7 +273,7 @@ def get_dts_analytics_data(mgr: Optional[SnowflakeManager] = None) -> Dict[str, 
     """
     manager = mgr or snowflake_manager
     db = env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
-    sh = env_config.get("SNOWFLAKE_SH", "UNIFIFEDAI_SH")
+    sh = env_config.get("SNOWFLAKE_SH", "UNIFIEDAI_SH")
     
     # 1. Fetch live Data Quality Dimensions from Snowflake DQ_RULES
     sql_dq = f"""
@@ -283,7 +284,7 @@ def get_dts_analytics_data(mgr: Optional[SnowflakeManager] = None) -> Dict[str, 
         95.0 AS TARGET,
         'Optimal' AS STATUS,
         COALESCE(MAX(DESCRIPTION), 'Validated schema and data rule') AS DESCRIPTION
-    FROM {db}.{sh}.DQ_RULES
+    FROM {db}.UNIFIEDAI_SH.DQ_RULES
     GROUP BY RULE_CATEGORY
     ORDER BY SCORE DESC;
     """
@@ -299,17 +300,17 @@ def get_dts_analytics_data(mgr: Optional[SnowflakeManager] = None) -> Dict[str, 
         for r in (dq_rows or [])
     ]
 
-    # 2. Fetch live Date-Time Series (DTS) from Snowflake POLICY_TRENDS & CLAIMS_KPI
+    # 2. Fetch live Date-Time Series (DTS) from Snowflake ANALYTICS schema
     sql_ts = f"""
     SELECT 
         TO_VARCHAR(pt.MONTH_YEAR, 'Mon YYYY') AS MONTH,
         ROUND(SUM(pt.TOTAL_PREMIUM_REVENUE), 2) AS PREMIUM_INFLOW,
-        (SELECT ROUND(SUM(ck.TOTAL_PAYOUT), 2) FROM {db}.{sh}.CLAIMS_KPI ck WHERE ck.MONTH_YEAR = pt.MONTH_YEAR) AS CLAIMS_INCURRED,
-        (SELECT ROUND(AVG(ck.AVG_PROCESSING_DAYS), 1) FROM {db}.{sh}.CLAIMS_KPI ck WHERE ck.MONTH_YEAR = pt.MONTH_YEAR) AS PROCESSING_DAYS,
-        (SELECT ROUND(AVG(ck.CUSTOMER_SATISFACTION) * 20.0, 1) FROM {db}.{sh}.CLAIMS_KPI ck WHERE ck.MONTH_YEAR = pt.MONTH_YEAR) AS DATA_TRUST_SCORE,
-        (SELECT ROUND(AVG(lr.LOSS_RATIO) * 100.0, 1) FROM {db}.{sh}.LOSS_RATIO_HISTORY lr WHERE lr.MONTH_YEAR = pt.MONTH_YEAR) AS LOSS_RATIO_PCT,
+        (SELECT ROUND(SUM(ck.TOTAL_PAYOUT), 2) FROM {db}.ANALYTICS.CLAIMS_KPI ck WHERE ck.MONTH_YEAR = pt.MONTH_YEAR) AS CLAIMS_INCURRED,
+        (SELECT ROUND(AVG(ck.AVG_PROCESSING_DAYS), 1) FROM {db}.ANALYTICS.CLAIMS_KPI ck WHERE ck.MONTH_YEAR = pt.MONTH_YEAR) AS PROCESSING_DAYS,
+        (SELECT ROUND(AVG(ck.CUSTOMER_SATISFACTION) * 20.0, 1) FROM {db}.ANALYTICS.CLAIMS_KPI ck WHERE ck.MONTH_YEAR = pt.MONTH_YEAR) AS DATA_TRUST_SCORE,
+        (SELECT ROUND(AVG(lr.LOSS_RATIO) * 100.0, 1) FROM {db}.ANALYTICS.LOSS_RATIO_HISTORY lr WHERE lr.MONTH_YEAR = pt.MONTH_YEAR) AS LOSS_RATIO_PCT,
         SUM(pt.ACTIVE_POLICIES) AS ACTIVE_POLICIES
-    FROM {db}.{sh}.POLICY_TRENDS pt
+    FROM {db}.ANALYTICS.POLICY_TRENDS pt
     GROUP BY pt.MONTH_YEAR
     ORDER BY pt.MONTH_YEAR ASC
     LIMIT 12;
@@ -341,18 +342,25 @@ def get_risk_and_churn_analytics(mgr: Optional[SnowflakeManager] = None, state: 
     """
     manager = mgr or snowflake_manager
     db = env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
-    sh = env_config.get("SNOWFLAKE_SH", "UNIFIFEDAI_SH")
 
     st_join = ""
     st_where_risk = ""
     st_where_flagged = "WHERE (cl.FRAUD_FLAG = TRUE OR cl.FRAUD_SCORE >= 0.75)"
+    churn_join = ""
+    churn_where = ""
+    tier_join = ""
+    tier_where = ""
     
     if state and state.upper() not in ["ALL", "NATIONAL", "NONE"]:
-        st_join = f"JOIN {db}.{sh}.POLICIES p_st ON cl.POLICY_ID = p_st.POLICY_ID JOIN {db}.{sh}.CUSTOMERS c_st ON p_st.CUSTOMER_ID = c_st.CUSTOMER_ID"
+        st_join = f"JOIN {db}.CORE.POLICIES p_st ON cl.POLICY_ID = p_st.POLICY_ID JOIN {db}.CORE.CUSTOMERS c_st ON p_st.CUSTOMER_ID = c_st.CUSTOMER_ID"
         st_where_risk = f"WHERE c_st.STATE = '{state.upper()}'"
         st_where_flagged = f"WHERE c_st.STATE = '{state.upper()}' AND (cl.FRAUD_FLAG = TRUE OR cl.FRAUD_SCORE >= 0.75)"
+        churn_join = f"JOIN {db}.CORE.CUSTOMERS c_churn ON arp.CUSTOMER_ID = c_churn.CUSTOMER_ID"
+        churn_where = f"WHERE c_churn.STATE = '{state.upper()}'"
+        tier_join = f"JOIN {db}.CORE.CUSTOMERS c_t ON p.CUSTOMER_ID = c_t.CUSTOMER_ID"
+        tier_where = f"WHERE c_t.STATE = '{state.upper()}'"
 
-    # 1. Live Risk Analysis by Category from Snowflake CLAIMS
+    # 1. Live Risk Analysis by Category from Snowflake CORE.CLAIMS
     sql_risk = f"""
     SELECT 
         cl.CLAIM_TYPE AS CATEGORY,
@@ -367,7 +375,7 @@ def get_risk_and_churn_analytics(mgr: Optional[SnowflakeManager] = None, state: 
             WHEN AVG(cl.FRAUD_SCORE) >= 0.45 THEN 'Moderate'
             ELSE 'Low'
         END AS RISK_SEVERITY
-    FROM {db}.{sh}.CLAIMS cl
+    FROM {db}.CORE.CLAIMS cl
     {st_join}
     {st_where_risk}
     GROUP BY cl.CLAIM_TYPE
@@ -387,7 +395,7 @@ def get_risk_and_churn_analytics(mgr: Optional[SnowflakeManager] = None, state: 
         for r in (rows_risk or [])
     ]
 
-    # 2. Live Flagged High Risk Claims from Snowflake CLAIMS
+    # 2. Live Flagged High Risk Claims from Snowflake CORE.CLAIMS
     sql_flagged = f"""
     SELECT 
         cl.CLAIM_ID, cl.POLICY_ID, cl.CLAIM_TYPE AS CATEGORY, 
@@ -395,7 +403,7 @@ def get_risk_and_churn_analytics(mgr: Optional[SnowflakeManager] = None, state: 
         ROUND(cl.FRAUD_SCORE, 2) AS FRAUD_SCORE, 
         cl.PRIORITY, 
         COALESCE(cl.FRAUD_REASON, 'Suspicious fraud risk pattern') AS REASON
-    FROM {db}.{sh}.CLAIMS cl
+    FROM {db}.CORE.CLAIMS cl
     {st_join}
     {st_where_flagged}
     ORDER BY cl.FRAUD_SCORE DESC, cl.CLAIM_AMOUNT DESC
@@ -415,17 +423,19 @@ def get_risk_and_churn_analytics(mgr: Optional[SnowflakeManager] = None, state: 
         for r in (rows_flagged or [])
     ]
 
-    # 3. Live Churn by Category from Snowflake AT_RISK_POLICIES
+    # 3. Live Churn by Category from Snowflake RISK.AT_RISK_POLICIES
     sql_churn = f"""
     SELECT 
-        POLICY_TYPE AS CATEGORY,
-        COUNT(POLICY_ID) AS ACTIVE_BASE,
-        ROUND(AVG(CHURN_PROBABILITY) * 100.0, 1) AS CHURN_RATE_PCT,
-        COUNT(CASE WHEN CHURN_PROBABILITY >= 0.50 THEN 1 END) AS CHURNED_POLICIES,
-        ROUND(SUM(REVENUE_AT_RISK), 2) AS REVENUE_AT_RISK,
-        COALESCE(MAX(RISK_DRIVERS), 'Pricing & Processing SLA') AS TOP_CHURN_DRIVER
-    FROM {db}.{sh}.AT_RISK_POLICIES
-    GROUP BY POLICY_TYPE
+        arp.POLICY_TYPE AS CATEGORY,
+        COUNT(arp.POLICY_ID) AS ACTIVE_BASE,
+        ROUND(AVG(arp.CHURN_PROBABILITY) * 100.0, 1) AS CHURN_RATE_PCT,
+        COUNT(CASE WHEN arp.CHURN_PROBABILITY >= 0.50 THEN 1 END) AS CHURNED_POLICIES,
+        ROUND(SUM(arp.REVENUE_AT_RISK), 2) AS REVENUE_AT_RISK,
+        COALESCE(MAX(arp.RISK_DRIVERS), 'Pricing & Processing SLA') AS TOP_CHURN_DRIVER
+    FROM {db}.RISK.AT_RISK_POLICIES arp
+    {churn_join}
+    {churn_where}
+    GROUP BY arp.POLICY_TYPE
     ORDER BY CHURN_RATE_PCT DESC;
     """
     rows_churn, _ = manager.execute_query(sql_churn)
@@ -441,18 +451,15 @@ def get_risk_and_churn_analytics(mgr: Optional[SnowflakeManager] = None, state: 
         for r in (rows_churn or [])
     ]
 
-    # 4. Live Churn by Plan Tier from Snowflake POLICIES & CHURN_PREDICTIONS
-    tier_where = f"WHERE c_t.STATE = '{state.upper()}'" if state and state.upper() not in ["ALL", "NATIONAL", "NONE"] else ""
-    tier_join = f"JOIN {db}.{sh}.CUSTOMERS c_t ON p.CUSTOMER_ID = c_t.CUSTOMER_ID" if state and state.upper() not in ["ALL", "NATIONAL", "NONE"] else ""
-    
+    # 4. Live Churn by Plan Tier from Snowflake CORE.POLICIES & RISK.CHURN_PREDICTIONS
     sql_tier = f"""
     SELECT 
         p.PLAN_TIER AS PLAN_TIER,
         COUNT(p.POLICY_ID) AS POLICIES,
         ROUND(AVG(COALESCE(cp.CHURN_PROBABILITY, 0.18)) * 100.0, 1) AS CHURN_RATE_PCT,
         ROUND(AVG(p.PREMIUM_AMOUNT), 2) AS AVG_PREMIUM
-    FROM {db}.{sh}.POLICIES p
-    LEFT JOIN {db}.{sh}.CHURN_PREDICTIONS cp ON p.POLICY_ID = cp.POLICY_ID
+    FROM {db}.CORE.POLICIES p
+    LEFT JOIN {db}.RISK.CHURN_PREDICTIONS cp ON p.POLICY_ID = cp.POLICY_ID
     {tier_join}
     {tier_where}
     GROUP BY p.PLAN_TIER
@@ -469,8 +476,8 @@ def get_risk_and_churn_analytics(mgr: Optional[SnowflakeManager] = None, state: 
         for r in (rows_tier or [])
     ]
 
-    # 5. Live Risk Drivers from Snowflake AT_RISK_POLICIES
-    sql_insights = f"""SELECT DISTINCT RISK_DRIVERS FROM {db}.{sh}.AT_RISK_POLICIES WHERE RISK_DRIVERS IS NOT NULL LIMIT 4;"""
+    # 5. Live Risk Drivers from Snowflake RISK.AT_RISK_POLICIES
+    sql_insights = f"""SELECT DISTINCT RISK_DRIVERS FROM {db}.RISK.AT_RISK_POLICIES WHERE RISK_DRIVERS IS NOT NULL LIMIT 4;"""
     insight_rows, _ = manager.execute_query(sql_insights)
     churn_insights = [
         f"**{r.get('RISK_DRIVERS')}**: Identified across policyholders in Snowflake `AT_RISK_POLICIES`."
@@ -486,32 +493,58 @@ def get_risk_and_churn_analytics(mgr: Optional[SnowflakeManager] = None, state: 
     }
 
 
-def get_tables_metadata(mgr: Optional[SnowflakeManager] = None) -> Dict[str, Any]:
-    """Returns database catalog table metadata directly from Snowflake INFORMATION_SCHEMA."""
+def get_tables_metadata(mgr: Optional[SnowflakeManager] = None, schema_filter: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Returns database catalog table metadata across all schemas in UNIFIEDAI_DB directly from INFORMATION_SCHEMA.
+    Fetches CORE, ANALYTICS, RISK, PREMIUM, and UNIFIEDAI_SH schemas.
+    """
     manager = mgr or snowflake_manager
     db = env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
-    sh = env_config.get("SNOWFLAKE_SH", "UNIFIFEDAI_SH")
-    sql = f"SELECT TABLE_NAME, ROW_COUNT, BYTES FROM {db}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{sh}' ORDER BY TABLE_NAME;"
+    sh = env_config.get("SNOWFLAKE_SH", "UNIFIEDAI_SH")
+    
+    filter_clause = f"AND TABLE_SCHEMA = '{schema_filter.upper()}'" if schema_filter and schema_filter.upper() not in ["ALL", "ALL SCHEMAS"] else ""
+    sql = f"""
+    SELECT 
+        TABLE_SCHEMA, 
+        TABLE_NAME, 
+        ROW_COUNT, 
+        BYTES, 
+        TABLE_TYPE 
+    FROM {db}.INFORMATION_SCHEMA.TABLES 
+    WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA') {filter_clause}
+    ORDER BY TABLE_SCHEMA, TABLE_NAME;
+    """
     rows, _ = manager.execute_query(sql)
+    
+    tables_list = []
+    schemas_set = set()
+    for r in (rows or []):
+        t_sch = r.get("TABLE_SCHEMA")
+        t_name = r.get("TABLE_NAME")
+        schemas_set.add(t_sch)
+        tables_list.append({
+            "schema": t_sch,
+            "name": t_name,
+            "full_name": f"{db}.{t_sch}.{t_name}",
+            "rows": int(r.get("ROW_COUNT") or 0) if r.get("ROW_COUNT") is not None else 0,
+            "bytes": int(r.get("BYTES") or 0) if r.get("BYTES") is not None else 0,
+            "type": r.get("TABLE_TYPE", "BASE TABLE"),
+            "description": f"Snowflake object in {db}.{t_sch}"
+        })
+        
     return {
         "database": db,
-        "schema": sh,
-        "tables": [
-            {
-                "name": r.get("TABLE_NAME"),
-                "rows": int(r.get("ROW_COUNT") or 0),
-                "columns": 12,
-                "description": f"Live Snowflake table in {db}.{sh}"
-            }
-            for r in (rows or [])
-        ]
+        "active_schema": sh,
+        "schemas": sorted(list(schemas_set)),
+        "total_tables": len(tables_list),
+        "tables": tables_list
     }
 
 
 def generate_insurance_analytics_response(prompt: str, db: Optional[str] = None, mgr: Optional[SnowflakeManager] = None) -> Tuple[str, str, List[Dict[str, Any]], List[str], str]:
     """Executes dynamic or semantic insurance analytics queries with natural language synthesis."""
     manager = mgr or snowflake_manager
-    target_db = db or env_config.get("SNOWFLAKE_DB", "INSURANCE_MGMT_SYSTEM")
+    target_db = db or env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
     p = prompt.lower()
     
     # 1. Dynamic SQL generation via Snowflake Cortex Complete
