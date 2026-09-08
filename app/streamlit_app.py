@@ -14,13 +14,16 @@ import streamlit as st
 # ---------------------------------------------------------
 try:
     st.set_page_config(
-        page_title="❄ INSIGHT AI — Insurance Intelligence Studio",
+        page_title=" INSIGHT AI — Insurance Intelligence Studio",
         page_icon="❄️",
         layout="wide",
         initial_sidebar_state="expanded"
     )
 except Exception:
     pass
+
+import streamlit.components.v1 as components
+
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -52,17 +55,236 @@ st.markdown("""
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
     
-    /* Top Header Bar */
+    /* ========================================================= */
+    /* Hide ONLY Deploy, 3-Dots Menu & Decoration Bar            */
+    /* KEEP Sidebar Toggle Visible & Fully Functional            */
+    /* ========================================================= */
+    #MainMenu,
+    .stAppDeployButton,
+    div[data-testid="stDeployButton"],
+    div[data-testid="stDecoration"],
+    footer {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        width: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+    }
+
+    /* Make header zero-height so it takes no space, while keeping interactive controls visible */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+        background-color: transparent !important;
+        border: none !important;
+        height: 0px !important;
+        min-height: 0px !important;
+        max-height: 0px !important;
+        padding: 0px !important;
+        margin: 0px !important;
+        overflow: visible !important;
+        pointer-events: none !important;
+        z-index: 10000000 !important;
+    }
+    header[data-testid="stHeader"] * {
+        pointer-events: auto !important;
+    }
+
+    /* Sidebar Collapse & Expand Toggle Controls - Explicitly Visible & Clickable */
+    div[data-testid="collapsedControl"],
+    button[data-testid="stSidebarCollapseButton"],
+    div[data-testid="stSidebarCollapsedControl"],
+    div[data-testid="stSidebarHeader"] button,
+    section[data-testid="stSidebar"] button[data-testid="baseButton-header"] {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        z-index: 10000002 !important;
+    }
+
+    /* Expand Button (When Sidebar is Collapsed) */
+    div[data-testid="collapsedControl"] {
+        position: fixed !important;
+        top: 8px !important;
+        left: 12px !important;
+        background: rgba(15, 23, 42, 0.96) !important;
+        border: 1px solid rgba(56, 189, 248, 0.6) !important;
+        border-radius: 8px !important;
+        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.7), 0 0 12px rgba(56, 189, 248, 0.35) !important;
+        padding: 3px !important;
+        cursor: pointer !important;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+    div[data-testid="collapsedControl"]:hover {
+        background: rgba(30, 41, 59, 1) !important;
+        border-color: #38BDF8 !important;
+        box-shadow: 0 0 20px rgba(56, 189, 248, 0.6) !important;
+        transform: scale(1.05) !important;
+    }
+    div[data-testid="collapsedControl"] button {
+        color: #38BDF8 !important;
+        background: transparent !important;
+        border: none !important;
+        cursor: pointer !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 4px 6px !important;
+    }
+    div[data-testid="collapsedControl"] svg {
+        fill: #38BDF8 !important;
+        width: 20px !important;
+        height: 20px !important;
+    }
+
+    /* Adjust navbar brand container when sidebar is collapsed so expand button has clean spacing */
+    .stApp:has(div[data-testid="collapsedControl"]) .top-navbar .brand-container,
+    div[data-testid="stAppViewContainer"]:has(div[data-testid="collapsedControl"]) .top-navbar .brand-container {
+        padding-left: 54px !important;
+        transition: padding-left 0.2s ease !important;
+    }
+
+    /* Sidebar Header (When Sidebar is Open) */
+    section[data-testid="stSidebar"] div[data-testid="stSidebarHeader"] {
+        display: flex !important;
+        visibility: visible !important;
+        align-items: center !important;
+        justify-content: flex-end !important;
+        padding: 8px 12px 2px 12px !important;
+        margin: 0 !important;
+        background: transparent !important;
+        border: none !important;
+        box-sizing: border-box !important;
+    }
+    button[data-testid="stSidebarCollapseButton"],
+    div[data-testid="stSidebarHeader"] button,
+    section[data-testid="stSidebar"] button[data-testid="baseButton-header"] {
+        color: #94A3B8 !important;
+        background: rgba(30, 41, 59, 0.8) !important;
+        border: 1px solid rgba(148, 163, 184, 0.3) !important;
+        border-radius: 8px !important;
+        padding: 4px 8px !important;
+        height: 32px !important;
+        min-height: 32px !important;
+        cursor: pointer !important;
+        transition: all 0.2s ease !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    button[data-testid="stSidebarCollapseButton"]:hover,
+    div[data-testid="stSidebarHeader"] button:hover,
+    section[data-testid="stSidebar"] button[data-testid="baseButton-header"]:hover {
+        color: #38BDF8 !important;
+        background: rgba(56, 189, 248, 0.2) !important;
+        border-color: #38BDF8 !important;
+        box-shadow: 0 0 10px rgba(56, 189, 248, 0.4) !important;
+    }
+    button[data-testid="stSidebarCollapseButton"] svg,
+    div[data-testid="stSidebarHeader"] button svg,
+    section[data-testid="stSidebar"] button[data-testid="baseButton-header"] svg {
+        fill: #94A3B8 !important;
+    }
+    button[data-testid="stSidebarCollapseButton"]:hover svg,
+    div[data-testid="stSidebarHeader"] button:hover svg,
+    section[data-testid="stSidebar"] button[data-testid="baseButton-header"]:hover svg {
+        fill: #38BDF8 !important;
+    }
+
+    /* Ensure Right Side (Main Content Area) Has Full Native Smooth Scrolling */
+    section.main,
+    section[data-testid="stMain"],
+    .main,
+    div[data-testid="stAppViewContainer"] > section {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        height: 100vh !important;
+        position: relative !important;
+        padding-top: 0px !important;
+        margin-top: 0px !important;
+    }
+
+    /* Zero Top Padding for Main Inner Block Containers */
+    div[data-testid="stMainBlockContainer"],
+    div[data-testid="stAppViewBlockContainer"],
+    div[data-testid="block-container"],
+    .block-container {
+        padding-top: 0px !important;
+        margin-top: 0px !important;
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+        padding-bottom: 2.5rem !important;
+        max-width: 100% !important;
+        overflow: visible !important;
+    }
+
+    /* Hide empty element containers, style-only containers & iframe helpers */
+    div[data-testid="element-container"]:empty,
+    div[data-testid="stElementContainer"]:empty,
+    div[data-testid="element-container"]:has(style:only-child),
+    div[data-testid="stElementContainer"]:has(style:only-child),
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(style:only-child),
+    iframe[title="streamlit.components.v1.html"] {
+        display: none !important;
+        height: 0px !important;
+        min-height: 0px !important;
+        max-height: 0px !important;
+        margin: 0px !important;
+        padding: 0px !important;
+        position: absolute !important;
+        pointer-events: none !important;
+        visibility: hidden !important;
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"],
+    div[data-testid="stVerticalBlock"] {
+        overflow: visible !important;
+        padding-top: 0px !important;
+    }
+
+    /* Sticky Edge-to-Edge Flush Top Navbar */
+    div[data-testid="element-container"]:has(.top-navbar),
+    div[data-testid="stElementContainer"]:has(.top-navbar),
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.top-navbar),
+    div.stMarkdown:has(.top-navbar),
+    div[data-testid="stMarkdownContainer"]:has(.top-navbar) {
+        position: sticky !important;
+        top: 0px !important;
+        z-index: 999999 !important;
+        width: 100% !important;
+        margin: 0px !important;
+        padding: 0px !important;
+        background: transparent !important;
+    }
+
     .top-navbar {
+        position: sticky !important;
+        top: 0px !important;
+        z-index: 999999 !important;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        background: linear-gradient(90deg, rgba(11, 17, 32, 0.96) 0%, rgba(22, 33, 56, 0.92) 100%);
-        border: 1px solid rgba(56, 189, 248, 0.2);
-        border-radius: 12px;
-        padding: 12px 24px;
-        margin-bottom: 24px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+        height: 56px !important;
+        min-height: 56px !important;
+        max-height: 56px !important;
+        width: calc(100% + 1.5rem) !important;
+        margin-left: -0.75rem !important;
+        margin-right: -0.75rem !important;
+        margin-top: 0px !important;
+        margin-bottom: 20px !important;
+        padding: 0 20px !important;
+        background: linear-gradient(90deg, rgba(8, 12, 21, 0.98) 0%, rgba(15, 23, 42, 0.97) 100%) !important;
+        backdrop-filter: blur(24px) !important;
+        -webkit-backdrop-filter: blur(24px) !important;
+        border-bottom: 1px solid rgba(56, 189, 248, 0.28) !important;
+        border-top: none !important;
+        border-left: none !important;
+        border-right: none !important;
+        border-radius: 0 !important;
+        box-shadow: 0 10px 36px rgba(0, 0, 0, 0.65) !important;
+        box-sizing: border-box !important;
     }
     .brand-container {
         display: flex;
@@ -70,130 +292,395 @@ st.markdown("""
         gap: 12px;
     }
     .brand-logo {
-        font-size: 1.5rem;
+        font-size: 1.32rem;
         font-weight: 800;
         letter-spacing: -0.5px;
         background: linear-gradient(135deg, #38BDF8 0%, #00D4B2 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .nav-divider {
+        width: 1px;
+        height: 20px;
+        background: rgba(148, 163, 184, 0.25);
+        margin: 0 2px;
+    }
+    .nav-breadcrumb {
+        font-size: 0.82rem;
+        font-weight: 500;
+        color: #94A3B8;
+        letter-spacing: 0.2px;
+    }
+    .nav-status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(16, 185, 129, 0.12);
+        border: 1px solid rgba(16, 185, 129, 0.35);
+        color: #34D399;
+        font-size: 0.72rem;
+        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: 20px;
+    }
+    .pulse-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background-color: #34D399;
+        box-shadow: 0 0 8px #34D399;
+        animation: pulseGreen 1.8s infinite ease-in-out;
+    }
+    @keyframes pulseGreen {
+        0% { transform: scale(0.9); opacity: 0.7; }
+        50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 12px #34D399; }
+        100% { transform: scale(0.9); opacity: 0.7; }
     }
     .header-actions {
         display: flex;
         align-items: center;
-        gap: 14px;
+        gap: 12px;
+    }
+    .nav-meta-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(30, 41, 59, 0.65);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        padding: 4px 12px;
+        border-radius: 8px;
+        font-size: 0.76rem;
+        color: #94A3B8;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .nav-meta-chip b {
+        color: #38BDF8;
     }
     .user-pill {
         display: flex;
         align-items: center;
         gap: 10px;
-        background: rgba(14, 165, 233, 0.15);
-        border: 1px solid rgba(14, 165, 233, 0.4);
-        padding: 5px 14px;
-        border-radius: 30px;
+        background: rgba(14, 165, 233, 0.12);
+        border: 1px solid rgba(14, 165, 233, 0.35);
+        padding: 3px 12px 3px 6px;
+        border-radius: 24px;
     }
     .user-avatar {
-        width: 28px;
-        height: 28px;
+        width: 26px;
+        height: 26px;
         border-radius: 50%;
         background: linear-gradient(135deg, #0284C7 0%, #0D9488 100%);
         color: #FFFFFF;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 0.82rem;
+        font-size: 0.8rem;
         font-weight: 700;
-        box-shadow: 0 0 10px rgba(14, 165, 233, 0.5);
+        box-shadow: 0 0 8px rgba(14, 165, 233, 0.4);
     }
     .user-name-text {
         color: #F1F5F9;
         font-weight: 600;
-        font-size: 0.88rem;
+        font-size: 0.8rem;
+        line-height: 1.1;
     }
     .user-role-badge {
         color: #00D4B2;
-        font-size: 0.72rem;
-        font-weight: 500;
+        font-size: 0.66rem;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
     }
 
-    /* Modern Sidebar Styling */
+    /* ========================================================= */
+    /* Pixel-Perfect Balanced Sidebar Design System              */
+    /* ========================================================= */
     section[data-testid="stSidebar"] {
-        background-color: #080C15 !important;
-        border-right: 1px solid rgba(148, 163, 184, 0.12) !important;
+        background-color: #070B14 !important;
+        border-right: 1px solid rgba(56, 189, 248, 0.18) !important;
+        z-index: 1000 !important;
+        padding: 0 !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stSidebarContent"] {
+        padding: 12px 14px 20px 14px !important;
+        margin: 0 !important;
+        box-sizing: border-box !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"],
+    section[data-testid="stSidebar"] div[class*="stSidebarUserContent"],
+    section[data-testid="stSidebar"] div[data-testid="stVerticalBlockBorderWrapper"] {
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {
+        gap: 8px !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stElementContainer"],
+    section[data-testid="stSidebar"] div.element-container {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }
     section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] {
         display: none !important;
     }
+
     .sidebar-brand-card {
-        background: linear-gradient(145deg, rgba(30, 41, 59, 0.6) 0%, rgba(15, 23, 42, 0.9) 100%);
-        border: 1px solid rgba(56, 189, 248, 0.25);
-        border-radius: 12px;
-        padding: 16px;
-        margin-bottom: 18px;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        background: linear-gradient(145deg, rgba(15, 23, 42, 0.9) 0%, rgba(10, 15, 29, 0.98) 100%);
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-top: 2px;
+        margin-bottom: 10px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+        box-sizing: border-box;
+        width: 100%;
     }
     .sidebar-brand-title {
-        font-size: 1.25rem;
+        font-size: 1.15rem;
         font-weight: 800;
         background: linear-gradient(135deg, #38BDF8 0%, #00D4B2 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        letter-spacing: -0.3px;
-        margin-bottom: 4px;
+        letter-spacing: -0.4px;
+        margin: 0;
+        line-height: 1.2;
     }
-    .sidebar-section-header {
+    .sidebar-live-pill {
+        background: rgba(16, 185, 129, 0.15);
+        border: 1px solid rgba(16, 185, 129, 0.4);
+        color: #34D399;
+        font-size: 0.65rem;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 12px;
+        letter-spacing: 0.5px;
+    }
+    .sidebar-brand-sub {
         font-size: 0.72rem;
+        color: #94A3B8;
+        font-weight: 500;
+        margin-top: 4px;
+        line-height: 1.2;
+    }
+
+    .sidebar-section-header {
+        font-size: 0.68rem;
         font-weight: 800;
         color: #64748B;
         text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-top: 18px;
-        margin-bottom: 8px;
-        padding-left: 4px;
-    }
-    .sidebar-telemetry-box {
-        background: rgba(15, 23, 42, 0.7);
-        border: 1px solid rgba(148, 163, 184, 0.15);
-        border-radius: 10px;
-        padding: 12px;
-        margin-top: 14px;
-        font-size: 0.8rem;
-        color: #94A3B8;
-    }
-    .telemetry-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 6px;
-    }
-    .telemetry-val {
-        color: #F1F5F9;
-        font-weight: 600;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.78rem;
+        letter-spacing: 1.2px;
+        margin-top: 14px !important;
+        margin-bottom: 6px !important;
+        padding-left: 2px;
+        display: block !important;
+        clear: both !important;
     }
     .sidebar-user-footer {
         background: linear-gradient(145deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.8) 100%);
-        border: 1px solid rgba(56, 189, 248, 0.2);
-        border-radius: 10px;
-        padding: 12px;
-        margin-top: 18px;
+        border: 1px solid rgba(56, 189, 248, 0.22);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-top: 12px;
         display: flex;
         align-items: center;
         gap: 10px;
+        box-sizing: border-box;
+        width: 100%;
     }
 
+    /* ========================================================= */
+    /* Uniform Responsive Button Design System                   */
+    /* Enforces 1 Standard Width & Height Across All Buttons     */
+    /* ========================================================= */
+    div.stButton > button,
+    div.stDownloadButton > button,
+    div[data-testid="stPopover"] > button {
+        height: 40px !important;
+        min-height: 40px !important;
+        max-height: 40px !important;
+        line-height: 40px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        font-size: 0.84rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.2px !important;
+        border-radius: 8px !important;
+        padding: 0 16px !important;
+        white-space: nowrap !important;
+        text-overflow: ellipsis !important;
+        overflow: hidden !important;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        box-sizing: border-box !important;
+    }
+
+    /* Primary Buttons Uniformity */
+    div.stButton > button[kind="primary"],
+    div.stDownloadButton > button[kind="primary"],
+    div.stButton > button[data-testid="baseButton-primary"] {
+        background: linear-gradient(135deg, #0284C7 0%, #0D9488 100%) !important;
+        border: 1px solid rgba(56, 189, 248, 0.45) !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 4px 14px rgba(2, 132, 199, 0.3) !important;
+    }
+    div.stButton > button[kind="primary"]:hover,
+    div.stDownloadButton > button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #0369A1 0%, #0F766E 100%) !important;
+        border-color: #38BDF8 !important;
+        box-shadow: 0 6px 20px rgba(56, 189, 248, 0.45) !important;
+        transform: translateY(-1px) !important;
+    }
+
+    /* Secondary Buttons Uniformity */
+    div.stButton > button[kind="secondary"],
+    div.stDownloadButton > button[kind="secondary"],
+    div.stButton > button[data-testid="baseButton-secondary"] {
+        background: rgba(30, 41, 59, 0.65) !important;
+        border: 1px solid rgba(148, 163, 184, 0.22) !important;
+        color: #CBD5E1 !important;
+    }
+    div.stButton > button[kind="secondary"]:hover,
+    div.stDownloadButton > button[kind="secondary"]:hover {
+        background: rgba(51, 65, 85, 0.85) !important;
+        border-color: rgba(56, 189, 248, 0.4) !important;
+        color: #F8FAFC !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25) !important;
+        transform: translateY(-1px) !important;
+    }
+
+    /* Popover Button Uniformity */
+    div[data-testid="stPopover"] {
+        width: 100% !important;
+    }
+    div[data-testid="stPopover"] > button {
+        width: 100% !important;
+        background: rgba(30, 41, 59, 0.65) !important;
+        border: 1px solid rgba(148, 163, 184, 0.22) !important;
+        color: #CBD5E1 !important;
+    }
+    div[data-testid="stPopover"] > button:hover {
+        background: rgba(51, 65, 85, 0.85) !important;
+        border-color: rgba(56, 189, 248, 0.4) !important;
+        color: #F8FAFC !important;
+    }
+
+    /* Sidebar Navigation Buttons - Flush, High-Tech, Zero-Waste */
+    section[data-testid="stSidebar"] div.stButton {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    section[data-testid="stSidebar"] div.stButton > button {
+        width: 100% !important;
+        height: 40px !important;
+        min-height: 40px !important;
+        max-height: 40px !important;
+        line-height: 40px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        padding: 0 14px !important;
+        font-size: 0.86rem !important;
+        font-weight: 600 !important;
+        border-radius: 8px !important;
+        margin: 0 !important;
+        box-sizing: border-box !important;
+        text-align: left !important;
+    }
+    section[data-testid="stSidebar"] div.stButton > button * {
+        text-align: left !important;
+        justify-content: flex-start !important;
+    }
+
+    /* Active Sidebar Navigation Item Styling */
+    section[data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, rgba(2, 132, 199, 0.35) 0%, rgba(13, 148, 136, 0.25) 100%) !important;
+        border: 1px solid #38BDF8 !important;
+        border-left: 3.5px solid #38BDF8 !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 4px 14px rgba(56, 189, 248, 0.25) !important;
+    }
+
+    /* Inactive Sidebar Navigation Item Styling */
+    section[data-testid="stSidebar"] div.stButton > button[kind="secondary"] {
+        background: rgba(15, 23, 42, 0.65) !important;
+        border: 1px solid rgba(148, 163, 184, 0.16) !important;
+        color: #94A3B8 !important;
+    }
+    section[data-testid="stSidebar"] div.stButton > button[kind="secondary"]:hover {
+        background: rgba(30, 41, 59, 0.85) !important;
+        border-color: rgba(56, 189, 248, 0.5) !important;
+        color: #F8FAFC !important;
+        transform: translateX(2px) !important;
+    }
+
+    /* Compact Selectbox inside Sidebar */
+    section[data-testid="stSidebar"] div[data-testid="stSelectbox"] {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    section[data-testid="stSidebar"] div[data-baseweb="select"] {
+        width: 100% !important;
+    }
+    section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
+        background: rgba(15, 23, 42, 0.85) !important;
+        border: 1px solid rgba(148, 163, 184, 0.22) !important;
+        border-radius: 8px !important;
+        height: 38px !important;
+        min-height: 38px !important;
+        font-size: 0.82rem !important;
+        box-sizing: border-box !important;
+    }
+    section[data-testid="stSidebar"] hr {
+        margin: 10px 0 !important;
+        border: none !important;
+        border-top: 1px solid rgba(148, 163, 184, 0.16) !important;
+    }
+
+    /* State Pills Filter Container - Equal Width & Responsive Scroll */
+    div[data-testid="stHorizontalBlock"]:has(button[key*="btn_st_"]) {
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        gap: 8px !important;
+        padding-bottom: 4px !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(button[key*="btn_st_"]) > div[data-testid="column"] {
+        flex: 1 1 0px !important;
+        min-width: 105px !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(button[key*="btn_st_"]) div.stButton > button {
+        width: 100% !important;
+        height: 38px !important;
+        min-height: 38px !important;
+        max-height: 38px !important;
+        line-height: 38px !important;
+        font-size: 0.78rem !important;
+        padding: 0 8px !important;
+    }
+
+    /* ========================================================= */
+    /* UI Responsiveness & Adaptive Breakpoints                  */
+    /* ========================================================= */
     /* Greeting Section */
     .greeting-title {
-        font-size: 2.15rem;
+        font-size: clamp(1.4rem, 2.5vw, 2.15rem);
         font-weight: 800;
         color: #F8FAFC;
         margin-bottom: 4px;
         letter-spacing: -0.6px;
     }
     .greeting-sub {
-        font-size: 1.12rem;
+        font-size: clamp(0.9rem, 1.2vw, 1.12rem);
         color: #94A3B8;
-        margin-bottom: 24px;
+        margin-bottom: 20px;
     }
 
     /* Suggested Pills */
@@ -206,14 +693,49 @@ st.markdown("""
         margin-bottom: 8px;
     }
 
-    /* KPI Metric Cards */
+    /* KPI Metric Cards Responsive Grid */
     .kpi-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
         gap: 16px;
-        margin-top: 24px;
-        margin-bottom: 28px;
+        margin-top: 20px;
+        margin-bottom: 24px;
     }
+    @media (max-width: 1200px) {
+        .kpi-grid {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+    }
+    @media (max-width: 600px) {
+        .kpi-grid {
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+    }
+
+    /* Responsive Multi-Column Layouts */
+    @media (max-width: 960px) {
+        div[data-testid="stHorizontalBlock"]:not(:has(button[key*="btn_st_"])) {
+            flex-direction: column !important;
+            gap: 16px !important;
+        }
+        div[data-testid="stHorizontalBlock"]:not(:has(button[key*="btn_st_"])) > div[data-testid="column"] {
+            width: 100% !important;
+            min-width: 100% !important;
+            flex: 1 1 100% !important;
+        }
+        .top-navbar {
+            padding: 8px 14px !important;
+        }
+        .nav-breadcrumb {
+            display: none !important;
+        }
+        .nav-divider {
+            display: none !important;
+        }
+    }
+
     .kpi-card {
         background: linear-gradient(145deg, #1E293B 0%, #0F172A 100%);
         border: 1px solid rgba(148, 163, 184, 0.15);
@@ -600,8 +1122,8 @@ def get_time_greeting():
 # ---------------------------------------------------------
 # State Initialization
 # ---------------------------------------------------------
-if "current_nav" not in st.session_state:
-    st.session_state.current_nav = "◈ Home"
+if "current_nav" not in st.session_state or st.session_state.current_nav in ["◈ Home", "◉ Ask AI"]:
+    st.session_state.current_nav = "◈ Insurance Portfolio"
 
 if "selected_prompt" not in st.session_state:
     st.session_state.selected_prompt = None
@@ -634,8 +1156,8 @@ sf_context = fetch_snowflake_status(API_BASE_URL)
 current_user = sf_context.get("user") or env_config.get("SNOWFLAKE_USERNAME", "UNIFIEDAI")
 current_role = sf_context.get("role") or "ACCOUNTADMIN"
 current_wh = sf_context.get("warehouse") or "COMPUTE_WH"
-current_db = sf_context.get("database") or "INSURANCE_MGMT_SYSTEM"
-current_sh = sf_context.get("schema") or "HACKATHON_SH"
+current_db = sf_context.get("database") or "UNIFIEDAI_DB"
+current_sh = sf_context.get("schema") or "UNIFIEDAI_SH"
 current_agent = sf_context.get("default_agent") or "INS_ANALYTICS_AGENT"
 
 # Active state cross-filter
@@ -656,6 +1178,8 @@ st.markdown(f"""
     <div class="top-navbar">
         <div class="brand-container">
             <span class="brand-logo">❄ INSIGHT AI</span>
+            <div class="nav-divider"></div>
+            <span class="nav-breadcrumb">Enterprise Intelligence Studio</span>
         </div>
         <div class="header-actions">
             <div class="user-pill">
@@ -671,27 +1195,37 @@ st.markdown(f"""
 
 
 # ---------------------------------------------------------
-# Upgraded Enterprise Sidebar Design System
+# Upgraded Enterprise Sidebar Design System (Zero-Padding Flush)
 # ---------------------------------------------------------
 with st.sidebar:
     # 1. Brand Card
-    st.markdown(f"""
+    st.markdown("""
         <div class="sidebar-brand-card">
-            <div class="sidebar-brand-title">❄ INSIGHT AI</div>
-            <div style="font-size:0.78rem;color:#94A3B8;">Insurance Intelligence Studio</div>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div class="sidebar-brand-title">❄ INSIGHT AI</div>
+                <span class="sidebar-live-pill">● LIVE</span>
+            </div>
+            <div class="sidebar-brand-sub">Snowflake Intelligence Suite</div>
         </div>
     """, unsafe_allow_html=True)
 
     # 2. Primary Navigation Groups
-    st.markdown('<div class="sidebar-section-header"><span>NAVIGATION</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-section-header">WORKSPACE NAVIGATION</div>', unsafe_allow_html=True)
     
-    nav_analytics = ["◈ Home", "◉ Ask AI", "⚡ Explore", "📊 Data"]
+    nav_analytics = ["◈ Insurance Portfolio", "◉ Enterprise AI", "⚡ Explore", "📊 Data"]
     for nav_item in nav_analytics:
         is_active = (st.session_state.current_nav == nav_item)
         btn_type = "primary" if is_active else "secondary"
         if st.button(nav_item, key=f"btn_nav_{nav_item}", use_container_width=True, type=btn_type):
-            st.session_state.current_nav = nav_item
-            st.rerun()
+            if "Enterprise AI" in nav_item:
+                st.session_state.current_nav = "◉ Enterprise AI"
+                try:
+                    st.switch_page("pages/1_Enterprise_AI.py")
+                except Exception:
+                    st.rerun()
+            else:
+                st.session_state.current_nav = nav_item
+                st.rerun()
 
     st.divider()
 
@@ -701,7 +1235,7 @@ with st.sidebar:
     auto_run_sql = True
 
     # 3. Global Timeframe Filter
-    st.markdown("### 📅 Timeframe")
+    st.markdown('<div class="sidebar-section-header">TIMEFRAME SCOPE</div>', unsafe_allow_html=True)
     time_filter = st.selectbox(
         "Timeframe Filter",
         ["FY2024 YTD", "Last 90 Days", "Last 30 Days", "All Time Historical"],
@@ -709,34 +1243,7 @@ with st.sidebar:
         label_visibility="collapsed"
     )
 
-    # 5. Live Session Telemetry Box
-    st.markdown(f"""
-        <div class="sidebar-telemetry-box">
-            <div class="telemetry-row">
-                <span>Warehouse:</span>
-                <span class="telemetry-val">{current_wh}</span>
-            </div>
-            <div class="telemetry-row">
-                <span>Database:</span>
-                <span class="telemetry-val">{current_db}</span>
-            </div>
-            <div class="telemetry-row">
-                <span>Schema:</span>
-                <span class="telemetry-val">{current_sh}</span>
-            </div>
-            <div class="telemetry-row">
-                <span>Security:</span>
-                <span class="telemetry-val" style="color:#34D399;">🔒 MFA Cached</span>
-            </div>
-            <div class="telemetry-row" style="margin-bottom:0;">
-                <span>Heartbeat:</span>
-                <span class="telemetry-val" style="color:#38BDF8;">Active (10m)</span>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-
-    # 6. Quick Actions & User Footer
-    st.markdown("<br>", unsafe_allow_html=True)
+    # Quick Actions & User Footer
     if st.button("🧹 Clear Chat History", use_container_width=True):
         st.session_state.messages = []
         st.session_state.selected_prompt = None
@@ -748,9 +1255,9 @@ with st.sidebar:
     st.markdown(f"""
         <div class="sidebar-user-footer">
             <div class="user-avatar">{user_initial}</div>
-            <div style="flex:1;">
-                <div class="user-name-text">{current_user}</div>
-                <div class="user-role-badge">{current_role} • Online</div>
+            <div style="flex:1; min-width: 0;">
+                <div class="user-name-text" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{current_user}</div>
+                <div class="user-role-badge">● {current_role}</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -859,10 +1366,10 @@ def render_assistant_response(msg_dict, msg_key_prefix=""):
 
 
 # ---------------------------------------------------------
-# VIEW 1: ◈ HOME DASHBOARD
+# VIEW 1: ◈ INSURANCE PORTFOLIO DASHBOARD
 # ---------------------------------------------------------
-if st.session_state.current_nav == "◈ Home":
-    st.markdown(f'<div class="greeting-title">❄️ Insurance Portfolio Intelligence Dashboard</div>', unsafe_allow_html=True)
+if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfolio", "◈ Home"]:
+    st.markdown(f'<div class="greeting-title">Insurance Portfolio Intelligence Dashboard</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="greeting-sub" style="margin-bottom: 20px;">Real-time portfolio performance, risk exposure, and operational intelligence.</div>', unsafe_allow_html=True)
 
     # ---------------------------------------------------------
@@ -875,12 +1382,12 @@ if st.session_state.current_nav == "◈ Home":
         </div>
     """, unsafe_allow_html=True)
 
-    # State Selection Filter Pills Bar
-    state_cols = st.columns([1.6, 1, 1, 1, 1, 1, 1, 1])
+    # State Selection Filter Pills Bar (Uniform 1:1 Width & Height Across All Options)
+    state_cols = st.columns(8)
     
     with state_cols[0]:
         is_nat = (st.session_state.selected_state == "National")
-        if st.button("🌐 National (All)", key="btn_st_all", use_container_width=True, type="primary" if is_nat else "secondary"):
+        if st.button("🌐 All States", key="btn_st_all", use_container_width=True, type="primary" if is_nat else "secondary"):
             st.session_state.selected_state = "National"
             st.rerun()
 
@@ -913,7 +1420,7 @@ if st.session_state.current_nav == "◈ Home":
         """, unsafe_allow_html=True)
 
     # 3D Pydeck Map & Geographic Breakdown Split
-    c_map, c_map_stats = st.columns([1.8, 1.2])
+    c_map, c_map_stats = st.columns([1.85, 1.15])
 
     with c_map:
         if geo_data:
@@ -922,106 +1429,166 @@ if st.session_state.current_nav == "◈ Home":
             df_geo["lon"] = pd.to_numeric(df_geo["lon"])
             df_geo["elevation"] = pd.to_numeric(df_geo["elevation"])
             
-            # Center on US or selected state
+            # Helper styling columns
+            def get_hex(status):
+                if "Critical" in str(status):
+                    return "#EF4444"
+                elif "Elevated" in str(status):
+                    return "#F59E0B"
+                return "#10B981"
+
+            df_geo["status_color_hex"] = df_geo["risk_label"].apply(get_hex)
+            df_geo["state_badge"] = df_geo["state"] + "\n" + df_geo["total_premium_formatted"]
+            df_geo["halo_radius"] = df_geo["claims_count"].apply(lambda c: max(65000, c * 2200))
+            df_geo["pillar_radius"] = 42000
+            df_geo["core_radius"] = 18000
+
+            # Default Isometric 3D Elevation scaled by written premium
+            df_geo["layer_elevation"] = df_geo["elevation"]
+
+            # Center on selected state or national overview (Isometric 3D Camera)
             if st.session_state.selected_state != "National":
                 matching_st = df_geo[df_geo["state"] == st.session_state.selected_state]
                 if not matching_st.empty:
                     view_lat = float(matching_st["lat"].values[0])
                     view_lon = float(matching_st["lon"].values[0])
-                    view_zoom = 4.8
-                    view_pitch = 45
+                    view_zoom = 5.0
                 else:
-                    view_lat, view_lon, view_zoom, view_pitch = 38.0, -96.0, 3.5, 40
+                    view_lat, view_lon, view_zoom = 38.0, -96.0, 3.55
             else:
-                view_lat, view_lon, view_zoom, view_pitch = 38.0, -96.0, 3.5, 40
+                view_lat, view_lon, view_zoom = 38.0, -96.0, 3.55
 
-            # 3D Column Layer for Premium Revenue Volume
+            # Locked Default Isometric 3D Perspective
+            view_pitch = 48
+            view_bearing = 10
+
+            # 1. Base Radial Ambient Glow Layer
+            halo_layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=df_geo,
+                get_position=["lon", "lat"],
+                get_radius="halo_radius",
+                radius_min_pixels=14,
+                radius_max_pixels=65,
+                get_fill_color="fill_color",
+                get_line_color="fill_color",
+                line_width_min_pixels=2,
+                stroked=True,
+                filled=True,
+                opacity=0.35,
+                pickable=False
+            )
+
+            # 2. 3D Prismatic Illuminated Columns
             column_layer = pdk.Layer(
                 "ColumnLayer",
                 data=df_geo,
                 get_position=["lon", "lat"],
-                get_elevation="elevation",
+                get_elevation="layer_elevation",
                 elevation_scale=1,
-                radius=75000,
+                radius=42000,
                 get_fill_color="fill_color",
                 pickable=True,
-                auto_highlight=True
+                auto_highlight=True,
+                material={
+                    "ambient": 0.45,
+                    "diffuse": 0.7,
+                    "shininess": 42,
+                    "specularColor": [56, 189, 248, 255]
+                }
             )
 
-            # Scatterplot Risk Glow Rings for Fraud / Claim Intensity
-            scatter_layer = pdk.Layer(
+            # 3. Central Pulsing Core Beacon
+            beacon_layer = pdk.Layer(
                 "ScatterplotLayer",
                 data=df_geo,
                 get_position=["lon", "lat"],
-                get_radius="claims_count * 1500",
-                radius_min_pixels=10,
-                radius_max_pixels=45,
-                get_fill_color="[255, 255, 255, 40]",
-                get_line_color="fill_color",
-                line_width_min_pixels=2,
+                get_radius="core_radius",
+                radius_min_pixels=6,
+                radius_max_pixels=22,
+                get_fill_color=[255, 255, 255, 230],
+                get_line_color=[56, 189, 248, 255],
+                line_width_min_pixels=2.5,
                 stroked=True,
                 filled=True,
                 pickable=True
             )
 
-            # State Code Text Overlay
+            # 4. Crisp State Label TextLayer
             text_layer = pdk.Layer(
                 "TextLayer",
                 data=df_geo,
                 get_position=["lon", "lat"],
-                get_text="state",
-                get_size=15,
-                get_color="[255, 255, 255, 255]",
-                get_alignment_baseline="'center'"
+                get_text="state_badge",
+                get_size=12,
+                get_color=[248, 250, 252, 240],
+                get_alignment_baseline="'bottom'",
+                get_text_anchor="'middle'",
+                get_pixel_offset=[0, -16],
+                billboard=True,
+                font_family="'Inter', sans-serif",
+                font_weight=700
             )
+
+            # Active Layers: Default Isometric 3D Suite (Halos, 3D Columns, Core Beacons, State Badges)
+            active_layers = [halo_layer, column_layer, beacon_layer, text_layer]
 
             tooltip_html = {
                 "html": """
-                <div style="background-color: #0F172A; padding: 10px 14px; border-radius: 8px; border: 1px solid #334155; font-family: Inter, sans-serif; color: #F8FAFC; min-width: 190px;">
-                    <div style="font-size: 14px; font-weight: 700; color: #38BDF8; margin-bottom: 4px;">{state_name} ({state})</div>
-                    <div style="font-size: 12px; margin-bottom: 2px;"><b>Written Premium:</b> {total_premium_formatted}</div>
-                    <div style="font-size: 12px; margin-bottom: 2px;"><b>Active Policies:</b> {policies_count}</div>
-                    <div style="font-size: 12px; margin-bottom: 2px;"><b>Loss Ratio:</b> {avg_loss_ratio}%</div>
-                    <div style="font-size: 12px; margin-bottom: 2px;"><b>Claims Volume:</b> {claims_count}</div>
-                    <div style="font-size: 12px; color: #F59E0B;"><b>Risk Status:</b> {risk_label}</div>
+                <div style="background: rgba(10, 15, 29, 0.95); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); padding: 14px 18px; border-radius: 12px; border: 1px solid rgba(56, 189, 248, 0.4); box-shadow: 0 16px 36px rgba(0, 0, 0, 0.75); font-family: Inter, -apple-system, sans-serif; color: #F8FAFC; min-width: 230px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.2); padding-bottom: 8px;">
+                        <span style="font-size: 15px; font-weight: 800; color: #38BDF8; letter-spacing: -0.3px;">📍 {state_name}</span>
+                        <span style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38BDF8; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px;">{state}</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; margin-bottom: 10px;">
+                        <div>
+                            <div style="color: #94A3B8; font-size: 10px; text-transform: uppercase;">Written Premium</div>
+                            <div style="font-weight: 700; color: #F1F5F9; font-size: 13px;">{total_premium_formatted}</div>
+                        </div>
+                        <div>
+                            <div style="color: #94A3B8; font-size: 10px; text-transform: uppercase;">Loss Ratio</div>
+                            <div style="font-weight: 700; color: #F59E0B; font-size: 13px;">{avg_loss_ratio}%</div>
+                        </div>
+                        <div>
+                            <div style="color: #94A3B8; font-size: 10px; text-transform: uppercase;">Active Policies</div>
+                            <div style="font-weight: 600; color: #E2E8F0;">{policies_count}</div>
+                        </div>
+                        <div>
+                            <div style="color: #94A3B8; font-size: 10px; text-transform: uppercase;">Claims Count</div>
+                            <div style="font-weight: 600; color: #E2E8F0;">{claims_count}</div>
+                        </div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(15, 23, 42, 0.8); padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(148, 163, 184, 0.15); font-size: 11px;">
+                        <span style="color: #94A3B8;">Territory Risk:</span>
+                        <span style="font-weight: 700; color: {status_color_hex};">● {risk_label}</span>
+                    </div>
                 </div>
                 """,
                 "style": {"color": "white"}
             }
 
             deck = pdk.Deck(
-                layers=[column_layer, scatter_layer, text_layer],
+                layers=active_layers,
                 initial_view_state=pdk.ViewState(
                     latitude=view_lat,
                     longitude=view_lon,
                     zoom=view_zoom,
                     pitch=view_pitch,
-                    bearing=0
+                    bearing=view_bearing
                 ),
                 tooltip=tooltip_html,
-                map_style="dark"
+                map_style=getattr(pdk.map_styles, 'CARTO_DARK', 'dark')
             )
 
-            map_mode = st.radio(
-                "Map Perspective", 
-                ["🏙️ 3D Risk & Elevation Pillars", "🗺️ 2D Geographic Bubble Map"], 
-                horizontal=True, 
-                label_visibility="collapsed", 
-                key="geo_map_mode"
-            )
-            
-            if map_mode == "🏙️ 3D Risk & Elevation Pillars":
-                st.pydeck_chart(deck, use_container_width=True)
-            else:
-                st.map(df_geo, latitude="lat", longitude="lon", size="policies_count", color="fill_color", use_container_width=True)
-            
-            # Map legend
+            st.pydeck_chart(deck, use_container_width=True)
+
+            # Sleek Glassmorphic Map Legend Bar
             st.markdown("""
-                <div style="display:flex; gap:16px; font-size:0.78rem; color:#94A3B8; margin-top:-4px; margin-bottom:12px;">
-                    <span>🟢 <b>Optimal Loss Ratio (&lt; 52%)</b></span>
-                    <span>🟠 <b>Elevated Risk (52% - 62%)</b></span>
-                    <span>🔴 <b>Critical Risk (&gt; 62%)</b></span>
-                    <span>🗼 <b>Pillar Height: Written Premium ($)</b></span>
+                <div style="display: flex; flex-wrap: wrap; gap: 14px; background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 8px; padding: 8px 16px; margin-top: 6px; margin-bottom: 12px; font-size: 0.78rem; color: #94A3B8; align-items: center;">
+                    <span>🟢 <b style="color: #34D399;">Optimal Loss Ratio (&lt; 52%)</b></span>
+                    <span>🟠 <b style="color: #FBBF24;">Elevated Risk (52% - 62%)</b></span>
+                    <span>🔴 <b style="color: #FB7185;">Critical Risk (&gt; 62%)</b></span>
+                    <span>🗼 <b style="color: #E2E8F0;">Pillar Height: Written Premium</b></span>
                 </div>
             """, unsafe_allow_html=True)
         else:
@@ -1030,15 +1597,31 @@ if st.session_state.current_nav == "◈ Home":
     with c_map_stats:
         st.markdown("#### 📊 Geographic Portfolio Breakdown")
         if geo_data:
+            # Top territory summary badges
+            st.markdown("""
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px;">
+                    <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 8px; padding: 10px;">
+                        <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase;">Top Written Premium</div>
+                        <div style="color: #38BDF8; font-weight: 800; font-size: 1rem;">TX • $1.19M</div>
+                        <div style="color: #34D399; font-size: 0.74rem;">51.4% Loss Ratio (Optimal)</div>
+                    </div>
+                    <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 8px; padding: 10px;">
+                        <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase;">Highest Risk Territory</div>
+                        <div style="color: #FB7185; font-weight: 800; font-size: 1rem;">IL • 69.2%</div>
+                        <div style="color: #94A3B8; font-size: 0.74rem;">$571k Written Premium</div>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
             df_geo_table = pd.DataFrame(geo_data)[["state", "state_name", "policies_count", "total_premium_formatted", "avg_loss_ratio", "risk_label"]]
             df_geo_table.columns = ["State", "Name", "Policies", "Revenue ($)", "Loss Ratio %", "Risk Status"]
-            st.dataframe(df_geo_table, use_container_width=True, height=275)
-            
-            # Quick summary alert
+            st.dataframe(df_geo_table, use_container_width=True, height=240)
+
+            # Territory Action Card
             st.markdown("""
-                <div class="dts-metric-card" style="padding: 12px 16px; margin-top: 8px;">
-                    <div style="font-size:0.84rem; font-weight:700; color:#38BDF8;">🏆 Top Revenue State: Texas (TX) — $1.19M</div>
-                    <div style="font-size:0.78rem; color:#94A3B8; margin-top:2px;">Highest Risk Loss Ratio: <b>Illinois (IL) at 69.2%</b>. Proactive deductible optimization recommended.</div>
+                <div class="dts-metric-card" style="padding: 10px 14px; margin-top: 8px;">
+                    <div style="font-size: 0.82rem; font-weight: 700; color: #38BDF8;">⚡ Live Territorial Cross-Filter Active</div>
+                    <div style="font-size: 0.76rem; color: #94A3B8; margin-top: 2px;">Click any state pill above to automatically synchronize the 3D map camera and drill-down metrics.</div>
                 </div>
             """, unsafe_allow_html=True)
 
@@ -1182,10 +1765,13 @@ if st.session_state.current_nav == "◈ Home":
                 df_flagged = pd.DataFrame(flagged)
                 st.dataframe(df_flagged[["Claim ID", "Category", "Claim Amount", "Fraud Score", "Priority", "Reason"]], use_container_width=True)
                 
-                if st.button("🔍 Investigate Flagged Claims in Ask AI", key="btn_home_investigate_risk", use_container_width=True):
+                if st.button("🔍 Investigate Flagged Claims in Enterprise AI", key="btn_home_investigate_risk", use_container_width=True):
                     st.session_state.selected_prompt = "Perform forensic risk analysis on top flagged insurance claims with fraud scores > 0.75."
-                    st.session_state.current_nav = "◉ Ask AI"
-                    st.rerun()
+                    st.session_state.current_nav = "◉ Enterprise AI"
+                    try:
+                        st.switch_page("pages/1_Enterprise_AI.py")
+                    except Exception:
+                        st.rerun()
 
     with c_churn:
         st.markdown("### 📉 Policyholder Churn by Category")
@@ -1216,11 +1802,15 @@ if st.session_state.current_nav == "◈ Home":
 
 
 # ---------------------------------------------------------
-# VIEW 2: ◉ ASK AI (Cortex Conversational Studio + File Upload)
+# VIEW 2: ◉ ENTERPRISE AI (Cortex Conversational Studio + File Upload)
 # ---------------------------------------------------------
-elif st.session_state.current_nav == "◉ Ask AI":
-    st.markdown("## ◉ Snowflake Cortex AI Studio")
-    st.caption(f"Intelligent insurance analytics assistant powered by `{selected_model}`.")
+elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉ Ask AI"]:
+    try:
+        st.switch_page("pages/1_Enterprise_AI.py")
+    except Exception:
+        pass
+    st.markdown("## ◉ Enterprise AI Studio")
+    # st.caption(f"Intelligent insurance analytics assistant powered by Snowflake Cortex and `{selected_model}`.")
 
     # Render active document attachment chip if attached (ChatGPT style)
     if st.session_state.uploaded_doc_name:
@@ -1243,9 +1833,9 @@ elif st.session_state.current_nav == "◉ Ask AI":
                 st.rerun()
 
     # Left Attachment Popover (like ChatGPT)
-    c_attach_btn, c_spacer = st.columns([2, 10])
+    c_attach_btn, c_spacer = st.columns([2.5, 9.5])
     with c_attach_btn:
-        with st.popover("📎 Attach File / Document", help="Attach Claim Document, Policy PDF, or Dataset to query"):
+        with st.popover("📎 Attach Document", use_container_width=True, help="Attach Claim Document, Policy PDF, or Dataset to query"):
             st.markdown("**Attach File for AI Analysis**")
             st.caption("Supported: PDF, CSV, Excel, TXT, JSON, Images")
             agent_up = st.file_uploader(
@@ -1340,7 +1930,7 @@ elif st.session_state.current_nav == "◉ Ask AI":
 # ---------------------------------------------------------
 # VIEW 3: ⚡ EXPLORE (Multi-Dimensional Analytics)
 # ---------------------------------------------------------
-elif st.session_state.current_nav == "⚡ Explore":
+elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
     st.markdown("## ⚡ Multi-Dimensional Analytics Explorer")
     st.caption("Slice, filter, and drill into live policy, claim, and geographic insurance metrics.")
 
@@ -1354,7 +1944,7 @@ elif st.session_state.current_nav == "⚡ Explore":
             CONCAT('$', TO_VARCHAR(ROUND(SUM(PREMIUM_AMOUNT), 2), '999,999,990.00')) AS "Revenue", 
             CONCAT('$', TO_VARCHAR(ROUND(AVG(PREMIUM_AMOUNT), 2), '999,990.00')) AS "Avg Premium", 
             TO_VARCHAR(ROUND(AVG(LOSS_RATIO), 2), '0.00') AS "Avg Loss Ratio" 
-        FROM {current_db}.{current_sh}.POLICIES 
+        FROM {current_db}.CORE.POLICIES 
         GROUP BY POLICY_TYPE 
         ORDER BY SUM(PREMIUM_AMOUNT) DESC;"""
         rows_p, _ = cached_sf_mgr.execute_query(sql_exp_p)
@@ -1365,7 +1955,7 @@ elif st.session_state.current_nav == "⚡ Explore":
         sql_exp_c = f"""SELECT 
             COALESCE(CLAIM_STATUS, 'Approved') AS "Status", 
             COUNT(CLAIM_ID) AS "Count" 
-        FROM {current_db}.{current_sh}.CLAIMS 
+        FROM {current_db}.CORE.CLAIMS 
         GROUP BY CLAIM_STATUS 
         ORDER BY "Count" DESC;"""
         rows_c, _ = cached_sf_mgr.execute_query(sql_exp_c)
@@ -1381,8 +1971,8 @@ elif st.session_state.current_nav == "⚡ Explore":
             COALESCE(c.STATE, 'Unknown') AS "State", 
             ROUND(SUM(p.PREMIUM_AMOUNT), 2) AS "Total Premium ($)", 
             COUNT(p.POLICY_ID) AS "Policies" 
-        FROM {current_db}.{current_sh}.POLICIES p 
-        JOIN {current_db}.{current_sh}.CUSTOMERS c ON p.CUSTOMER_ID = c.CUSTOMER_ID 
+        FROM {current_db}.CORE.POLICIES p 
+        JOIN {current_db}.CORE.CUSTOMERS c ON p.CUSTOMER_ID = c.CUSTOMER_ID 
         GROUP BY c.STATE 
         ORDER BY "Total Premium ($)" DESC 
         LIMIT 10;"""
@@ -1395,25 +1985,80 @@ elif st.session_state.current_nav == "⚡ Explore":
 
 
 # ---------------------------------------------------------
-# VIEW 4: 📊 DATA (Snowflake Catalog & Table Browser)
+# VIEW 4: 📊 DATA (Snowflake Catalog & Multi-Schema Table Browser)
 # ---------------------------------------------------------
-elif st.session_state.current_nav == "📊 Data":
-    st.markdown("## 📊 Snowflake Data Catalog")
-    st.caption("Live enterprise catalog metadata and table schemas.")
+elif st.session_state.current_nav in ["📊 Data", "Data"]:
+    st.markdown("## 📊 Snowflake Multi-Schema Data Catalog")
+    st.caption("Live enterprise catalog metadata, schema distribution, and interactive table browser across all database schemas.")
 
+    c_cat_schema, c_cat_stats = st.columns([2, 2])
+    with c_cat_schema:
+        catalog_schema_filter = st.selectbox(
+            "Filter Catalog by Schema",
+            ["All Schemas", "CORE", "ANALYTICS", "RISK", "PREMIUM", "UNIFIEDAI_SH"],
+            index=0,
+            key="catalog_schema_selector"
+        )
+    
+    schema_clause = f"AND TABLE_SCHEMA = '{catalog_schema_filter}'" if catalog_schema_filter != "All Schemas" else ""
     sql_tables = f"""SELECT 
+        TABLE_SCHEMA AS "Schema",
         TABLE_NAME AS "Table Name", 
         ROW_COUNT AS "Rows", 
         BYTES AS "Bytes", 
         TABLE_TYPE AS "Table Type" 
     FROM {current_db}.INFORMATION_SCHEMA.TABLES 
-    WHERE TABLE_SCHEMA = '{current_sh}' 
-    ORDER BY TABLE_NAME;"""
+    WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA') {schema_clause}
+    ORDER BY TABLE_SCHEMA, TABLE_NAME;"""
     table_rows, _ = cached_sf_mgr.execute_query(sql_tables)
-    st.dataframe(pd.DataFrame(table_rows or []), use_container_width=True)
+    df_catalog = pd.DataFrame(table_rows or [])
     
-    st.markdown("### 🔍 Live Preview: Policies")
-    sql_preview = f"SELECT POLICY_ID, POLICY_TYPE, PLAN_TIER, PREMIUM_AMOUNT, LOSS_RATIO FROM {current_db}.{current_sh}.POLICIES LIMIT 5;"
+    with c_cat_stats:
+        total_tbls = len(df_catalog)
+        total_rows_sum = int(df_catalog["Rows"].sum()) if not df_catalog.empty and "Rows" in df_catalog else 0
+        st.markdown(f"""
+            <div style="background: rgba(30,41,59,0.7); padding: 12px 16px; border-radius: 8px; border: 1px solid rgba(148,163,184,0.15); margin-top: 4px;">
+                <span style="color:#94A3B8; font-size:0.8rem;">Catalog Scope:</span> 
+                <b style="color:#38BDF8;">{catalog_schema_filter}</b> &nbsp;•&nbsp; 
+                <span style="color:#94A3B8; font-size:0.8rem;">Tables:</span> <b style="color:#34D399;">{total_tbls}</b> &nbsp;•&nbsp; 
+                <span style="color:#94A3B8; font-size:0.8rem;">Indexed Records:</span> <b style="color:#F1F5F9;">{total_rows_sum:,}</b>
+            </div>
+        """, unsafe_allow_html=True)
+
+    st.dataframe(df_catalog, use_container_width=True)
+    
+    st.markdown("### 🔍 Live Multi-Schema Table Preview")
+    preview_table_options = [
+        ("CORE", "POLICIES"),
+        ("CORE", "CLAIMS"),
+        ("CORE", "CUSTOMERS"),
+        ("CORE", "AGENTS"),
+        ("ANALYTICS", "CLAIMS_KPI"),
+        ("ANALYTICS", "POLICY_TRENDS"),
+        ("ANALYTICS", "LOSS_RATIO_HISTORY"),
+        ("RISK", "AT_RISK_POLICIES"),
+        ("RISK", "CHURN_PREDICTIONS"),
+        ("PREMIUM", "PLAN_TIERS"),
+        ("PREMIUM", "PREMIUM_CALCULATIONS"),
+        ("UNIFIEDAI_SH", "DQ_RULES"),
+        ("UNIFIEDAI_SH", "DQ_VALIDATION_RESULTS")
+    ]
+    
+    # Filter preview table list if a specific schema is chosen
+    if catalog_schema_filter != "All Schemas":
+        available_previews = [f"{s}.{t}" for s, t in preview_table_options if s == catalog_schema_filter]
+    else:
+        available_previews = [f"{s}.{t}" for s, t in preview_table_options]
+        
+    selected_preview = st.selectbox(
+        "Select Table to Preview Live Rows",
+        available_previews if available_previews else ["CORE.POLICIES"],
+        index=0,
+        key="table_preview_selector"
+    )
+    
+    p_schema, p_table = selected_preview.split(".")
+    sql_preview = f"SELECT * FROM {current_db}.{p_schema}.{p_table} LIMIT 8;"
     preview_rows, _ = cached_sf_mgr.execute_query(sql_preview)
     st.dataframe(pd.DataFrame(preview_rows or []), use_container_width=True)
 
@@ -1423,14 +2068,25 @@ elif st.session_state.current_nav == "📊 Data":
 # ---------------------------------------------------------
 elif st.session_state.current_nav == "📄 Docs":
     st.markdown("## 📄 Semantic Views & Data Dictionary")
-    st.caption("Enterprise insurance semantic data model and entity definitions.")
+    st.caption("Enterprise insurance semantic data model and entity definitions across all UNIFIEDAI_DB schemas.")
 
     st.markdown("""
-    ### 🏛️ Active Semantic Model: `INSURANCE_ANALYTICS`
-    - **Live Tables**: `POLICIES`, `CUSTOMERS`, `CLAIMS`, `AGENTS`, `AT_RISK_POLICIES`, `CHURN_PREDICTIONS`, `CLAIMS_KPI`, `POLICY_TRENDS`, `LOSS_RATIO_HISTORY`, `DQ_RULES`, `DQ_VALIDATION_RESULTS`
-    - **Key Dimensions**: `CUSTOMER_ID`, `POLICY_ID`, `AGENT_ID`, `CLAIM_TYPE`, `STATE`
-    - **Measures**: `PREMIUM_AMOUNT`, `CLAIM_AMOUNT`, `DAYS_TO_RESOLVE`, `FRAUD_SCORE`
-    - **Calculated Metrics**: `LOSS_RATIO = CLAIM_AMOUNT / PREMIUM_AMOUNT`
+    ### 🏛️ Unified Enterprise Data Architecture: `UNIFIEDAI_DB`
+    
+    | Schema | Tables | Description |
+    | :--- | :--- | :--- |
+    | **`CORE`** | `POLICIES`, `CUSTOMERS`, `CLAIMS`, `AGENTS` | Primary transactional and policyholder master entities. |
+    | **`ANALYTICS`** | `CLAIMS_KPI`, `POLICY_TRENDS`, `LOSS_RATIO_HISTORY`, `FRAUD_ALERTS`, `WHATIF_SIMULATION_LOG` | Curated KPI time series, aggregated financial trends, and loss trajectories. |
+    | **`RISK`** | `AT_RISK_POLICIES`, `CHURN_PREDICTIONS`, `RISK_FACTORS`, `V_RISK_CHURN` | AI/ML risk scoring, attrition forecasting, and churn risk drivers. |
+    | **`PREMIUM`** | `PLAN_TIERS`, `PREMIUM_CALCULATIONS`, `PREMIUM_FACTORS` | Underwriting risk adjustments, actuarial factors, and plan configurations. |
+    | **`UNIFIEDAI_SH`** | `DQ_RULES`, `DQ_VALIDATION_RESULTS`, `DQ_COLUMN_LINEAGE`, `DOCUMENT_CHUNKS` | Enterprise Data Trust Score (DTS) rules, lineage, and document knowledge embeddings. |
+
+    ---
+    ### 🔑 Key Dimensions & Metrics
+    - **Key Dimensions**: `CUSTOMER_ID`, `POLICY_ID`, `AGENT_ID`, `CLAIM_TYPE`, `STATE`, `PLAN_TIER`
+    - **Measures**: `PREMIUM_AMOUNT`, `CLAIM_AMOUNT`, `DAYS_TO_RESOLVE`, `FRAUD_SCORE`, `CHURN_PROBABILITY`
+    - **Loss Ratio Formula**: `LOSS_RATIO = CLAIM_AMOUNT / PREMIUM_AMOUNT`
+    - **Data Trust Score (DTS)**: Composite weighted pass rate across 50 enterprise DQ rules across 7 quality dimensions.
     """)
 
 
@@ -1439,7 +2095,7 @@ elif st.session_state.current_nav == "📄 Docs":
 # ---------------------------------------------------------
 elif st.session_state.current_nav == "🛡 Quality":
     st.markdown("## 🛡 Data Trust & Integrity Scorecard")
-    st.caption("Real-time data quality validation checks and pass thresholds.")
+    st.caption("Real-time data quality validation checks, rule categories, and pass thresholds from UNIFIEDAI_SH.DQ_RULES.")
 
     sql_dq_scorecard = f"""SELECT 
         RULE_NAME AS "Rule Name", 
@@ -1449,7 +2105,7 @@ elif st.session_state.current_nav == "🛡 Quality":
         SEVERITY AS "Severity", 
         ACTIVE_FLAG AS "Active", 
         DESCRIPTION AS "Description" 
-    FROM {current_db}.{current_sh}.DQ_RULES 
+    FROM {current_db}.UNIFIEDAI_SH.DQ_RULES 
     ORDER BY RULE_CATEGORY, RULE_NAME;"""
     dq_rows, _ = cached_sf_mgr.execute_query(sql_dq_scorecard)
     st.dataframe(pd.DataFrame(dq_rows or []), use_container_width=True)
@@ -1460,7 +2116,7 @@ elif st.session_state.current_nav == "🛡 Quality":
 # ---------------------------------------------------------
 elif st.session_state.current_nav == "🚨 Incidents":
     st.markdown("## 🚨 Incident & High Risk Alert Center")
-    st.caption("Flagged claims, potential fraud indicators, and priority escalations.")
+    st.caption("Flagged claims, potential fraud indicators, and priority escalations from CORE.CLAIMS.")
 
     st.markdown("### ⚠️ Active High-Risk Claims (Fraud Score >= 0.75 OR Fraud Flag = TRUE)")
     sql_incidents = f"""SELECT 
@@ -1472,7 +2128,7 @@ elif st.session_state.current_nav == "🚨 Incidents":
         PRIORITY AS "Priority", 
         CLAIM_STATUS AS "Status", 
         COALESCE(FRAUD_REASON, 'Suspicious claim pattern') AS "Fraud Reason" 
-    FROM {current_db}.{current_sh}.CLAIMS 
+    FROM {current_db}.CORE.CLAIMS 
     WHERE FRAUD_FLAG = TRUE OR FRAUD_SCORE >= 0.75 
     ORDER BY FRAUD_SCORE DESC, CLAIM_AMOUNT DESC 
     LIMIT 25;"""
