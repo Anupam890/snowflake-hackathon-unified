@@ -399,10 +399,7 @@ with st.sidebar:
 # Enterprise AI Main View
 # ---------------------------------------------------------
 st.markdown("""
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-        <div class="greeting-title" style="margin-bottom: 0;">◉ Enterprise AI Studio</div>
-        <div class="section-badge">⚡ Cortex Agent: Active</div>
-    </div>
+    <div class="greeting-title" style="margin-bottom: 4px;">◉ Enterprise AI Studio</div>
     <div class="greeting-sub" style="margin-bottom: 18px;">Conversational analytics powered by Snowflake Cortex LLM, semantic insurance models, and multimodal context.</div>
 """, unsafe_allow_html=True)
 

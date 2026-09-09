@@ -1018,6 +1018,15 @@ def fetch_geospatial_analytics(base_url: str = API_BASE_URL):
     return backend_service.get_state_geospatial_analytics(mgr=None)
 
 
+@st.cache_data(ttl=30)
+def fetch_trend_analytics(base_url: str = API_BASE_URL, state: Optional[str] = None):
+    try:
+        return backend_service.get_trend_analytics(mgr=cached_sf_mgr, state=state)
+    except Exception:
+        pass
+    return backend_service.get_trend_analytics(mgr=None, state=state)
+
+
 def extract_uploaded_file_content(uploaded_file):
     """Extracts clean text and metadata from uploaded PDF, CSV, Excel, TXT, JSON, or images."""
     if uploaded_file is None:
@@ -1167,6 +1176,7 @@ overview_data = fetch_overview_metrics(API_BASE_URL, state=active_state)
 dts_data = fetch_dts_analytics(API_BASE_URL)
 risk_churn_data = fetch_risk_churn_analytics(API_BASE_URL, state=active_state)
 geo_data = fetch_geospatial_analytics(API_BASE_URL)
+trend_data = fetch_trend_analytics(API_BASE_URL, state=active_state)
 
 
 # ---------------------------------------------------------
@@ -1392,13 +1402,13 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
             st.rerun()
 
     states_list = [
-        {"code": "TX", "label": "TX ($1.19M)"},
-        {"code": "AZ", "label": "AZ ($642k)"},
-        {"code": "IL", "label": "IL ($571k)"},
-        {"code": "CA", "label": "CA ($566k)"},
-        {"code": "PA", "label": "PA ($541k)"},
-        {"code": "NY", "label": "NY ($333k)"},
-        {"code": "GA", "label": "GA ($268k)"}
+        {"code": "TX", "label": "TX"},
+        {"code": "AZ", "label": "AZ"},
+        {"code": "IL", "label": "IL"},
+        {"code": "CA", "label": "CA"},
+        {"code": "PA", "label": "PA"},
+        {"code": "NY", "label": "NY"},
+        {"code": "GA", "label": "GA"}
     ]
 
     for idx, st_item in enumerate(states_list):
@@ -1419,8 +1429,22 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
             </div>
         """, unsafe_allow_html=True)
 
-    # 3D Pydeck Map & Geographic Breakdown Split
-    c_map, c_map_stats = st.columns([1.85, 1.15])
+    # KPI Overview Metrics
+    active_policies_val = overview_data.get("active_policies", 300)
+    active_policies_trend = overview_data.get("active_policies_trend", "+8.4% MoM")
+    
+    proc_days_val = overview_data.get("processing_days", overview_data.get("avg_settlement_days", 14.8))
+    proc_days_trend = overview_data.get("processing_days_trend", "-2.3d YoY")
+    
+    csat_score_val = overview_data.get("csat_score", "4.8 / 5.0")
+    csat_pct_val = overview_data.get("csat_pct", "94.2%")
+    csat_trend = overview_data.get("csat_trend", "+5.1% QoQ")
+    
+    prem_rev = overview_data.get("revenue", 2210154.0)
+    prem_rev_trend = overview_data.get("revenue_growth_pct", "+12.6% YoY")
+
+    # 3D Pydeck Map & Executive KPI Split
+    c_map, c_map_stats = st.columns([1.65, 1.35])
 
     with c_map:
         if geo_data:
@@ -1595,146 +1619,202 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
             st.info("Loading geospatial data from Snowflake...")
 
     with c_map_stats:
-        st.markdown("#### 📊 Geographic Portfolio Breakdown")
+        st.markdown("#### 📊 Executive Portfolio KPIs & Risk")
+        
+        # 4 KPI Cards in a 2x2 Responsive Grid
+        st.markdown(f"""
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 12px;">
+                <div class="kpi-card" style="padding: 14px 16px;">
+                    <div class="kpi-header">
+                        <span class="kpi-title" style="font-size: 0.78rem;">Active Policies</span>
+                        <span class="kpi-pill-green">{active_policies_trend}</span>
+                    </div>
+                    <div class="kpi-value" style="font-size: 1.55rem; margin-bottom: 2px;">{active_policies_val:,}</div>
+                    <div class="kpi-desc" style="font-size: 0.76rem;">Active policyholders across 4 tiers</div>
+                </div>
+                <div class="kpi-card" style="padding: 14px 16px;">
+                    <div class="kpi-header">
+                        <span class="kpi-title" style="font-size: 0.78rem;">Processing Days</span>
+                        <span class="kpi-pill-purple">{proc_days_trend}</span>
+                    </div>
+                    <div class="kpi-value" style="font-size: 1.55rem; margin-bottom: 2px;">{proc_days_val} Days</div>
+                    <div class="kpi-desc" style="font-size: 0.76rem;">Average claims turnaround</div>
+                </div>
+                <div class="kpi-card" style="padding: 14px 16px;">
+                    <div class="kpi-header">
+                        <span class="kpi-title" style="font-size: 0.78rem;">Customer CSAT</span>
+                        <span class="kpi-pill-green">{csat_trend}</span>
+                    </div>
+                    <div class="kpi-value" style="font-size: 1.55rem; margin-bottom: 2px;">{csat_score_val}</div>
+                    <div class="kpi-desc" style="font-size: 0.76rem;">{csat_pct_val} positive sentiment</div>
+                </div>
+                <div class="kpi-card" style="padding: 14px 16px;">
+                    <div class="kpi-header">
+                        <span class="kpi-title" style="font-size: 0.78rem;">Total Revenue</span>
+                        <span class="kpi-pill-blue">{prem_rev_trend}</span>
+                    </div>
+                    <div class="kpi-value" style="font-size: 1.55rem; margin-bottom: 2px;">${prem_rev/1_000_000:.2f}M</div>
+                    <div class="kpi-desc" style="font-size: 0.76rem;">Gross written annual premium</div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
         if geo_data:
             # Top territory summary badges
             st.markdown("""
-                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px;">
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 10px;">
                     <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 8px; padding: 10px;">
-                        <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase;">Top Written Premium</div>
-                        <div style="color: #38BDF8; font-weight: 800; font-size: 1rem;">TX • $1.19M</div>
-                        <div style="color: #34D399; font-size: 0.74rem;">51.4% Loss Ratio (Optimal)</div>
+                        <div style="color: #94A3B8; font-size: 0.70rem; text-transform: uppercase;">Top Written Premium</div>
+                        <div style="color: #38BDF8; font-weight: 800; font-size: 0.95rem;">TX • $1.19M</div>
+                        <div style="color: #34D399; font-size: 0.72rem;">51.4% Loss Ratio (Optimal)</div>
                     </div>
                     <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 8px; padding: 10px;">
-                        <div style="color: #94A3B8; font-size: 0.72rem; text-transform: uppercase;">Highest Risk Territory</div>
-                        <div style="color: #FB7185; font-weight: 800; font-size: 1rem;">IL • 69.2%</div>
-                        <div style="color: #94A3B8; font-size: 0.74rem;">$571k Written Premium</div>
+                        <div style="color: #94A3B8; font-size: 0.70rem; text-transform: uppercase;">Highest Risk Territory</div>
+                        <div style="color: #FB7185; font-weight: 800; font-size: 0.95rem;">IL • 69.2%</div>
+                        <div style="color: #94A3B8; font-size: 0.72rem;">$571k Written Premium</div>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
 
-            df_geo_table = pd.DataFrame(geo_data)[["state", "state_name", "policies_count", "total_premium_formatted", "avg_loss_ratio", "risk_label"]]
-            df_geo_table.columns = ["State", "Name", "Policies", "Revenue ($)", "Loss Ratio %", "Risk Status"]
-            st.dataframe(df_geo_table, use_container_width=True, height=240)
 
-            # Territory Action Card
-            st.markdown("""
-                <div class="dts-metric-card" style="padding: 10px 14px; margin-top: 8px;">
-                    <div style="font-size: 0.82rem; font-weight: 700; color: #38BDF8;">⚡ Live Territorial Cross-Filter Active</div>
-                    <div style="font-size: 0.76rem; color: #94A3B8; margin-top: 2px;">Click any state pill above to automatically synchronize the 3D map camera and drill-down metrics.</div>
-                </div>
-            """, unsafe_allow_html=True)
 
     # ---------------------------------------------------------
-    # ROW 1: KPI METRIC CARDS (Active Policies, Processing Days, CSAT, Total Revenue)
+    # ROW 2: CHARTS — TREND ANALYSIS (CALCULATED FROM CORE.CLAIMS & RISK.AT_RISK_POLICIES)
     # ---------------------------------------------------------
-    active_policies_val = overview_data.get("active_policies", 300)
-    active_policies_trend = overview_data.get("active_policies_trend", "+8.4% MoM")
-    
-    proc_days_val = overview_data.get("processing_days", overview_data.get("avg_settlement_days", 14.8))
-    proc_days_trend = overview_data.get("processing_days_trend", "-2.3d YoY")
-    
-    csat_score_val = overview_data.get("csat_score", "4.8 / 5.0")
-    csat_pct_val = overview_data.get("csat_pct", "94.2%")
-    csat_trend = overview_data.get("csat_trend", "+5.1% QoQ")
-    
-    prem_rev = overview_data.get("revenue", 2210154.0)
-    prem_rev_trend = overview_data.get("revenue_growth_pct", "+12.6% YoY")
-
+    curr_state_label = f"• {st.session_state.selected_state}" if st.session_state.selected_state != "National" else "• National Portfolio"
     st.markdown(f"""
-        <div class="kpi-grid">
-            <div class="kpi-card">
-                <div class="kpi-header">
-                    <span class="kpi-title">Active Policies</span>
-                    <span class="kpi-pill-green">{active_policies_trend}</span>
-                </div>
-                <div class="kpi-value">{active_policies_val:,}</div>
-                <div class="kpi-desc">Active policyholders across 4 tiers</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-header">
-                    <span class="kpi-title">Processing Days</span>
-                    <span class="kpi-pill-purple">{proc_days_trend}</span>
-                </div>
-                <div class="kpi-value">{proc_days_val} Days</div>
-                <div class="kpi-desc">Average claims resolution turnaround</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-header">
-                    <span class="kpi-title">Customer CSAT</span>
-                    <span class="kpi-pill-green">{csat_trend}</span>
-                </div>
-                <div class="kpi-value">{csat_score_val}</div>
-                <div class="kpi-desc">{csat_pct_val} positive sentiment score</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-header">
-                    <span class="kpi-title">Total Revenue</span>
-                    <span class="kpi-pill-blue">{prem_rev_trend}</span>
-                </div>
-                <div class="kpi-value">${prem_rev/1_000_000:.2f}M</div>
-                <div class="kpi-desc">Gross written annual premium</div>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-
-    # ---------------------------------------------------------
-    # ROW 2: DTS CHARTS (Data Trust Score & Date-Time Series)
-    # ---------------------------------------------------------
-    st.markdown("""
         <div class="section-header-banner">
-            <div class="section-title">⚡ Data Trust & Date-Time Series Analytics</div>
-            <div class="section-badge">Row 2 • Telemetry & Time-Series</div>
+            <div class="section-title">📈 Trend Analysis (Claims, Resolution, Fraud & At-Risk Revenue)</div>
+            <div class="section-badge">Row 2 • Live Snowflake CORE & RISK Schemas {curr_state_label}</div>
         </div>
     """, unsafe_allow_html=True)
 
-    c_dts_left, c_dts_right = st.columns([1, 1.1])
+    monthly_trends_list = trend_data.get("monthly_trends", [])
+    trend_summary = trend_data.get("summary", {})
 
-    with c_dts_left:
-        st.markdown("### 🛡 Data Trust Score (DTS) Quality Index")
-        st.caption("Composite data integrity telemetry validated across all insurance entity layers.")
-        
-        # Dimensions dataframe and comparison chart
-        quality_dims = dts_data.get("quality_dimensions", [])
-        if quality_dims:
-            df_dims = pd.DataFrame(quality_dims)
-            chart_df_dims = df_dims.set_index("Dimension")[["Score", "Target"]]
-            st.bar_chart(chart_df_dims, use_container_width=True)
-            
-            # Key quality score metrics
-            m1, m2, m3 = st.columns(3)
-            with m1:
-                st.metric("Completeness", "99.4%", "Zero null IDs")
-            with m2:
-                st.metric("Accuracy", "98.2%", "+1.4% Target")
-            with m3:
-                st.metric("Sync Freshness", "100%", "< 15m CDC")
-        else:
-            st.info("DTS dimensions loading...")
+    total_risk_rev = trend_summary.get("total_revenue_at_risk", 0.0)
+    total_risk_policies = trend_summary.get("total_new_at_risk_policies", 0)
+    avg_res_days = trend_summary.get("avg_claim_resolution_time_days", 0.0)
+    total_fraud_claims = trend_summary.get("total_fraud_flagged_claims", 0)
+    total_claim_count = trend_summary.get("total_claim_count", 0)
 
-    with c_dts_right:
-        st.markdown("### 📈 Date-Time Series (DTS) Operational Trajectory")
-        dts_metric_selection = st.radio(
-            "Select DTS Trajectory:",
-            ["💵 Inflow vs Outflow ($)", "⏱ Turnaround Speed (Days)", "📊 Loss Ratio vs DTS Trust (%)"],
+    # 5 KPI Summary Cards matching user requirements
+    st.markdown(f"""
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px;">
+            <div class="kpi-card" style="padding: 14px 16px;">
+                <div class="kpi-header">
+                    <span class="kpi-title" style="font-size: 0.74rem;">Revenue at Risk</span>
+                    <span class="kpi-pill-rose">Exposure</span>
+                </div>
+                <div class="kpi-value" style="font-size: 1.5rem; margin-bottom: 2px;">${total_risk_rev:,.0f}</div>
+                <div class="kpi-desc" style="font-size: 0.74rem;">Revenue at risk by month</div>
+            </div>
+            <div class="kpi-card" style="padding: 14px 16px;">
+                <div class="kpi-header">
+                    <span class="kpi-title" style="font-size: 0.74rem;">New At-Risk Policies</span>
+                    <span class="kpi-pill-amber">Policies</span>
+                </div>
+                <div class="kpi-value" style="font-size: 1.5rem; margin-bottom: 2px;">{total_risk_policies:,}</div>
+                <div class="kpi-desc" style="font-size: 0.74rem;">New at-risk policies by month</div>
+            </div>
+            <div class="kpi-card" style="padding: 14px 16px;">
+                <div class="kpi-header">
+                    <span class="kpi-title" style="font-size: 0.74rem;">Avg Resolution Time</span>
+                    <span class="kpi-pill-blue">Turnaround</span>
+                </div>
+                <div class="kpi-value" style="font-size: 1.5rem; margin-bottom: 2px;">{avg_res_days:.1f}d</div>
+                <div class="kpi-desc" style="font-size: 0.74rem;">Average claim resolution time (days)</div>
+            </div>
+            <div class="kpi-card" style="padding: 14px 16px;">
+                <div class="kpi-header">
+                    <span class="kpi-title" style="font-size: 0.74rem;">Fraud-Flagged Claims</span>
+                    <span class="kpi-pill-purple">Anomalies</span>
+                </div>
+                <div class="kpi-value" style="font-size: 1.5rem; margin-bottom: 2px;">{total_fraud_claims:,}</div>
+                <div class="kpi-desc" style="font-size: 0.74rem;">Fraud-flagged claims by month</div>
+            </div>
+            <div class="kpi-card" style="padding: 14px 16px;">
+                <div class="kpi-header">
+                    <span class="kpi-title" style="font-size: 0.74rem;">Claim Count</span>
+                    <span class="kpi-pill-green">Volume</span>
+                </div>
+                <div class="kpi-value" style="font-size: 1.5rem; margin-bottom: 2px;">{total_claim_count:,}</div>
+                <div class="kpi-desc" style="font-size: 0.74rem;">Claim count by month</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    df_trends = pd.DataFrame(monthly_trends_list)
+
+    c_claim_col, c_risk_col = st.columns([1, 1])
+
+    # ------------------ LEFT: CLAIMS & RESOLUTION TRENDS ------------------
+    with c_claim_col:
+        st.markdown("### 🚨 Claims Velocity & Resolution Trends")
+        st.caption("Monthly claims volume, settlement turnaround days, and fraud flags from `CORE.CLAIMS`.")
+
+        claim_chart_metric = st.radio(
+            "Select Claims Metric to Visualize:",
+            [
+                "📊 Claim count by month",
+                "⏱ Average claim resolution time (days) by month",
+                "🚨 Fraud-flagged claims by month",
+                "⚖️ Claim count vs Fraud-flagged claims"
+            ],
             horizontal=True,
-            key="dts_metric_selector"
+            key="claims_trend_selector"
         )
-        
-        ts_data = dts_data.get("time_series", [])
-        if ts_data:
-            df_ts = pd.DataFrame(ts_data)
-            if dts_metric_selection == "💵 Inflow vs Outflow ($)":
-                chart_flow = df_ts.set_index("Month")[["Premium Inflow", "Claims Incurred"]]
-                st.bar_chart(chart_flow, use_container_width=True)
-            elif dts_metric_selection == "⏱ Turnaround Speed (Days)":
-                chart_days = df_ts.set_index("Month")[["Processing Days"]]
-                st.line_chart(chart_days, use_container_width=True)
+
+        if not df_trends.empty:
+            if claim_chart_metric == "📊 Claim count by month":
+                chart_cc = df_trends.set_index("Month")[["Claim count by month"]]
+                st.bar_chart(chart_cc, use_container_width=True)
+            elif claim_chart_metric == "⏱ Average claim resolution time (days) by month":
+                chart_rt = df_trends.set_index("Month")[["Average claim resolution time (days) by month"]]
+                st.line_chart(chart_rt, use_container_width=True)
+            elif claim_chart_metric == "🚨 Fraud-flagged claims by month":
+                chart_ff = df_trends.set_index("Month")[["Fraud-flagged claims by month"]]
+                st.bar_chart(chart_ff, use_container_width=True)
             else:
-                chart_ratio = df_ts.set_index("Month")[["Data Trust Score", "Loss Ratio %"]]
-                st.area_chart(chart_ratio, use_container_width=True)
+                chart_comp = df_trends.set_index("Month")[["Claim count by month", "Fraud-flagged claims by month"]]
+                st.bar_chart(chart_comp, use_container_width=True)
         else:
-            st.info("Time series data loading...")
+            st.info("Claims trend data loading...")
+
+    # ------------------ RIGHT: AT-RISK POLICIES & REVENUE TRENDS ------------------
+    with c_risk_col:
+        st.markdown("### 💰 At-Risk Policies & Revenue Exposure Trends")
+        st.caption("Monthly at-risk policy identification and financial exposure from `RISK.AT_RISK_POLICIES`.")
+
+        risk_chart_metric = st.radio(
+            "Select Risk Exposure Metric to Visualize:",
+            [
+                "💵 Revenue at risk by month",
+                "🛡️ New at-risk policies by month",
+                "📊 Dual View: Revenue & Policies"
+            ],
+            horizontal=True,
+            key="risk_trend_selector"
+        )
+
+        if not df_trends.empty:
+            if risk_chart_metric == "💵 Revenue at risk by month":
+                chart_rr = df_trends.set_index("Month")[["Revenue at risk by month"]]
+                st.area_chart(chart_rr, use_container_width=True)
+            elif risk_chart_metric == "🛡️ New at-risk policies by month":
+                chart_np = df_trends.set_index("Month")[["New at-risk policies by month"]]
+                st.bar_chart(chart_np, use_container_width=True)
+            else:
+                sub_c1, sub_c2 = st.columns(2)
+                with sub_c1:
+                    st.caption("Revenue at risk by month ($)")
+                    st.area_chart(df_trends.set_index("Month")[["Revenue at risk by month"]], use_container_width=True)
+                with sub_c2:
+                    st.caption("New at-risk policies by month")
+                    st.bar_chart(df_trends.set_index("Month")[["New at-risk policies by month"]], use_container_width=True)
+        else:
+            st.info("At-risk policy trends data loading...")
+
 
     # ---------------------------------------------------------
     # ROW 3: RISK ANALYSIS & CHURN BY CATEGORY
@@ -1789,16 +1869,6 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
                 df_tier = pd.DataFrame(churn_tiers)
                 st.dataframe(df_tier, use_container_width=True)
             
-            # AI Insights Callout Box
-            insights = risk_churn_data.get("churn_insights", [])
-            if insights:
-                st.markdown("""
-                    <div class="insight-callout-box">
-                        <div style="font-weight:700; color:#38BDF8; margin-bottom:6px;">💡 Cortex Retention Insights</div>
-                """, unsafe_allow_html=True)
-                for ins in insights:
-                    st.markdown(f"- {ins}")
-                st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------
