@@ -99,9 +99,11 @@ def extract_sql_from_text(text: str) -> Optional[str]:
 
 
 def parse_sse_stream(sse_text: str):
-    """Parses Server-Sent Events stream from Snowflake Cortex Agent REST API."""
-    full_text = ""
-    thinking_text = ""
+    """Parses Server-Sent Events stream from Snowflake Cortex Agent REST API cleanly."""
+    complete_text_blocks = []
+    delta_text_blocks = []
+    thinking_blocks = []
+    sql_candidates = []
     warnings = []
     final_response = None
 
@@ -121,30 +123,54 @@ def parse_sse_stream(sse_text: str):
                 if current_event == "response":
                     final_response = data_json
                     for item in data_json.get("content", []):
-                        if item.get("type") == "text" and item.get("text"):
-                            full_text = item["text"]
-                        elif item.get("type") == "thinking" and "thinking" in item:
-                            thinking_text = item["thinking"].get("text", "")
+                        itype = item.get("type")
+                        if itype == "text" and item.get("text"):
+                            complete_text_blocks.append(item["text"])
+                        elif itype == "thinking" and "thinking" in item:
+                            thinking_blocks.append(item["thinking"].get("text", ""))
+                        elif itype in ["tool_use", "action"]:
+                            t_input = item.get("input", {})
+                            if isinstance(t_input, dict):
+                                for k in ["query", "sql", "statement"]:
+                                    if k in t_input and t_input[k]:
+                                        sql_candidates.append(t_input[k])
+                        elif itype in ["sql", "query"] and item.get("statement"):
+                            sql_candidates.append(item["statement"])
                     if "warnings" in data_json:
                         warnings.extend(data_json["warnings"])
-                elif current_event == "response.thinking":
+                elif current_event in ["response.thinking", "response.thinking.delta"]:
                     if "text" in data_json:
-                        thinking_text = data_json["text"]
-                elif current_event == "response.text":
+                        thinking_blocks.append(data_json["text"])
+                elif current_event in ["response.text", "response.text.delta"]:
                     if "text" in data_json:
-                        full_text = data_json["text"]
-                elif current_event == "response.text.delta" and not final_response:
-                    if "text" in data_json:
-                        full_text += data_json["text"]
-                elif current_event == "response.thinking.delta" and not final_response:
-                    if "text" in data_json:
-                        thinking_text += data_json["text"]
+                        delta_text_blocks.append(data_json["text"])
+                elif current_event in ["response.tool_use", "response.tool_call"]:
+                    tool_data = data_json.get("tool_use") or data_json
+                    t_input = tool_data.get("input", {})
+                    if isinstance(t_input, dict):
+                        for k in ["query", "sql", "statement"]:
+                            if k in t_input and t_input[k]:
+                                sql_candidates.append(t_input[k])
                 elif current_event == "response.warning":
                     warnings.append(data_json)
             except Exception:
                 pass
 
+    if complete_text_blocks:
+        full_text = "\n\n".join([t.strip() for t in complete_text_blocks if t.strip()])
+    elif delta_text_blocks:
+        full_text = "".join(delta_text_blocks).strip()
+    else:
+        full_text = ""
+
+    thinking_text = "\n".join([t.strip() for t in thinking_blocks if t.strip()])
+    
+    # If SQL was found in tool calls and not in full_text markdown, append it
+    if sql_candidates and not extract_sql_from_text(full_text):
+        full_text += f"\n\n```sql\n{sql_candidates[0].strip()}\n```"
+
     return full_text.strip(), thinking_text.strip(), warnings, final_response
+
 
 
 SCHEMA_METADATA = """
@@ -186,12 +212,14 @@ def generate_insurance_analytics_response(prompt: str, db: str) -> tuple[str, st
         sql_gen_prompt = f"""You are a Snowflake SQL Generator for an Insurance Data Platform.
 {SCHEMA_METADATA}
 
+
 Rules:
 1. Output ONLY a single executable Snowflake SQL query.
 2. Do NOT output markdown fences, comments, or explanations.
 3. Always qualify tables with {db}.CORE.<table_name> or alias properly.
 4. Use ROUND(...) on numeric aggregations.
 5. Add ORDER BY to sort aggregated metrics meaningfully.
+
 
 Question: {prompt}"""
 
@@ -536,17 +564,14 @@ def execute_cortex_agent_v2(db: str, schema: str, agent: str, payload: CortexAge
     except Exception as e:
         print(f"[Cortex Bridge] REST endpoint note: {e}")
 
-    # 2. If the agent needs concrete query execution or returned no data, execute directly using persistent pool
-    if not response_text or "unable to retrieve" in response_text.lower() or not query_data:
+    # 2. If the agent returned no valid response, execute fallback
+    if not response_text or "unable to retrieve" in response_text.lower():
         nl_resp, executed_sql, res_data, res_cols, gen_thinking = generate_insurance_analytics_response(prompt_text, db)
         
-        if not response_text or "unable to retrieve" in response_text.lower():
-            response_text = nl_resp
-        
-        if not sql_query and executed_sql:
-            sql_query = executed_sql
-            query_data = res_data
-            columns = res_cols
+        response_text = nl_resp
+        sql_query = executed_sql
+        query_data = res_data
+        columns = res_cols
 
         if not thinking_output:
             thinking_output = gen_thinking
