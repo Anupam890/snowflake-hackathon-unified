@@ -1253,9 +1253,7 @@ with st.sidebar:
         <div class="sidebar-brand-card">
             <div style="display: flex; align-items: center; justify-content: space-between;">
                 <div class="sidebar-brand-title">❄ INSIGHT AI</div>
-                <span class="sidebar-live-pill">● LIVE</span>
             </div>
-            <div class="sidebar-brand-sub">Snowflake Intelligence Suite</div>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1321,12 +1319,114 @@ with st.sidebar:
 # ---------------------------------------------------------
 # Helper: Render Assistant Chat Response
 # ---------------------------------------------------------
+def extract_table_from_text(text: str) -> Optional[pd.DataFrame]:
+    """Extracts markdown table from agent response text into a pandas DataFrame."""
+    if not text:
+        return None
+    try:
+        lines = [l.strip() for l in text.split('\n') if '|' in l]
+        table_lines = [l for l in lines if l.startswith('|') and l.endswith('|')]
+        if len(table_lines) >= 3 and any('-|-' in l or '---|' in l for l in table_lines):
+            from io import StringIO
+            df = pd.read_csv(StringIO('\n'.join(table_lines)), sep='|', engine='python').dropna(how='all', axis=1)
+            df.columns = [c.strip() for c in df.columns]
+            df = df[~df.iloc[:, 0].astype(str).str.contains('---', na=False)]
+            for col in df.columns:
+                df[col] = df[col].astype(str).str.strip()
+                try:
+                    clean_col = df[col].str.replace('$', '', regex=False).str.replace(',', '', regex=False).str.replace('%', '', regex=False)
+                    df[col] = pd.to_numeric(clean_col)
+                except Exception:
+                    pass
+            if len(df) > 0:
+                return df
+    except Exception:
+        pass
+    return None
+
+
+def render_interactive_chart(df: pd.DataFrame, key_prefix: str = ""):
+    """Renders smart interactive graphs (multi-series forecast, bar, line, area) for any tabular dataset."""
+    if df is None or df.empty:
+        return
+
+    cols = list(df.columns)
+    type_col = next((c for c in cols if any(k in c.lower() for k in ['policy_type', 'policy type', 'line', 'category', 'plan'])), None)
+    time_col = next((c for c in cols if any(k in c.lower() for k in ['month', 'date', 'period', 'horizon', 'quarter'])), None)
+    val_col = next((c for c in cols if any(k in c.lower() for k in ['forecast_new_policies', 'forecast', 'new_policies', 'policies', 'projected', 'count', 'value', 'amount', 'premium'])), None)
+
+    st.markdown("#### 📈 Visualization & Trends")
+
+    # 1. Specialized Multi-Series Time-Series / Forecast Chart (Pivoted by Category)
+    if type_col and time_col and val_col and pd.api.types.is_numeric_dtype(df[val_col]):
+        try:
+            pivoted = df.pivot(index=time_col, columns=type_col, values=val_col)
+            chart_type = st.radio(
+                "Select Graph Format:",
+                ["Multi-Series Line Chart", "Grouped Bar Chart", "Area Chart"],
+                horizontal=True,
+                key=f"pivot_chart_type_{key_prefix}"
+            )
+            if chart_type == "Multi-Series Line Chart":
+                st.line_chart(pivoted, use_container_width=True)
+            elif chart_type == "Grouped Bar Chart":
+                st.bar_chart(pivoted, use_container_width=True)
+            else:
+                st.area_chart(pivoted, use_container_width=True)
+            return
+        except Exception:
+            pass
+
+    # 2. General Dataframe Chart
+    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+    text_cols = df.select_dtypes(include=['object', 'string', 'category']).columns.tolist()
+
+    if len(numeric_cols) > 0:
+        chart_formats = ["Bar Chart", "Line Chart", "Area Chart"]
+        chart_type = st.radio(
+            "Select Graph Format:",
+            chart_formats,
+            horizontal=True,
+            key=f"gen_chart_type_{key_prefix}"
+        )
+        try:
+            if text_cols:
+                chart_df = df.set_index(text_cols[0])[numeric_cols[:4]]
+            else:
+                chart_df = df[numeric_cols[:4]]
+
+            if chart_type == "Bar Chart":
+                st.bar_chart(chart_df, use_container_width=True)
+            elif chart_type == "Line Chart":
+                st.line_chart(chart_df, use_container_width=True)
+            elif chart_type == "Area Chart":
+                st.area_chart(chart_df, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Chart render note: {e}")
+
+
 def render_assistant_response(msg_dict, msg_key_prefix=""):
     response_text = msg_dict.get("content", "")
+    # Strip "Recommended next steps:" from forecast responses
+    response_text = backend_service.remove_recommended_next_steps(response_text)
+    
     sql_query = msg_dict.get("sql")
     query_data = msg_dict.get("data")
     thinking = msg_dict.get("thinking")
     attached_doc = msg_dict.get("attached_doc")
+
+    # Extract or infer tabular DataFrame
+    df = None
+    if query_data and len(query_data) > 0:
+        try:
+            df = pd.DataFrame(query_data)
+        except Exception:
+            pass
+    if df is None or df.empty:
+        df = extract_table_from_text(response_text)
+
+    has_data = df is not None and not df.empty
+    has_sql = bool(sql_query and str(sql_query).strip())
 
     if attached_doc:
         st.markdown(f'<div class="attached-file-badge">📎 Context: {attached_doc}</div>', unsafe_allow_html=True)
@@ -1335,20 +1435,26 @@ def render_assistant_response(msg_dict, msg_key_prefix=""):
         with st.expander("💭 Thought for a few seconds", expanded=False):
             st.markdown(thinking)
 
+    # Clean direct response for non-tabular text
+    if not has_sql and not has_data:
+        st.markdown(response_text)
+        return
+
     tab_titles = ["💬 Answer"]
-    if sql_query:
-        tab_titles.append("🔍 Generated SQL")
-    if query_data and len(query_data) > 0:
+    if has_data:
         tab_titles.append("📊 Visualizations & Analytics")
+    if has_sql:
+        tab_titles.append("🔍 Generated SQL")
 
     tabs = st.tabs(tab_titles)
     tab_idx = 0
 
     with tabs[tab_idx]:
         st.markdown(response_text)
-        if query_data and len(query_data) > 0:
-            df = pd.DataFrame(query_data)
+        if has_data:
             st.markdown("<br>", unsafe_allow_html=True)
+            render_interactive_chart(df, key_prefix=f"sum_{msg_key_prefix}")
+            st.markdown("<br>##### 📋 Result Dataset", unsafe_allow_html=True)
             st.dataframe(df, use_container_width=True)
             
             csv_data = df.to_csv(index=False).encode('utf-8')
@@ -1361,51 +1467,20 @@ def render_assistant_response(msg_dict, msg_key_prefix=""):
             )
     tab_idx += 1
 
-    if sql_query:
+    if has_data:
         with tabs[tab_idx]:
-            st.markdown("**Generated Snowflake SQL Query:**")
-            st.code(sql_query, language="sql")
-        tab_idx += 1
-
-    if query_data and len(query_data) > 0:
-        with tabs[tab_idx]:
-            df = pd.DataFrame(query_data)
             numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-            text_cols = df.select_dtypes(include=['object', 'string', 'category']).columns.tolist()
-
-            st.markdown("### 📊 Interactive Visualizations")
             if len(numeric_cols) > 0:
-                chart_formats = ["Summary Metrics", "Bar Chart", "Line Chart", "Area Chart"] if len(df) == 1 else ["Bar Chart", "Line Chart", "Area Chart", "Summary Metrics"]
-                chart_type = st.radio(
-                    "Select Chart Format:",
-                    chart_formats,
-                    horizontal=True,
-                    key=f"chart_{msg_key_prefix}_{id(msg_dict)}"
-                )
+                st.markdown("### 📊 Metrics Overview")
+                m_cols = st.columns(min(len(numeric_cols), 4))
+                for i, num_col in enumerate(numeric_cols[:4]):
+                    with m_cols[i % min(len(numeric_cols), 4)]:
+                        val = df[num_col].iloc[0] if len(df) == 1 else (df[num_col].sum() if any(k in num_col for k in ["TOTAL", "SUM", "COUNT"]) else df[num_col].mean())
+                        val_str = f"${val:,.2f}" if isinstance(val, float) and val % 1 != 0 else f"{val:,}" if isinstance(val, (int, float)) else str(val)
+                        label = ("Total " if len(df) > 1 and any(k in num_col for k in ["TOTAL", "SUM", "COUNT"]) else "") + num_col.replace('_', ' ').title()
+                        st.metric(label=label, value=val_str)
 
-                if chart_type == "Summary Metrics":
-                    m_cols = st.columns(min(len(numeric_cols), 4))
-                    for i, num_col in enumerate(numeric_cols[:4]):
-                        with m_cols[i % min(len(numeric_cols), 4)]:
-                            val = df[num_col].iloc[0] if len(df) == 1 else (df[num_col].sum() if any(k in num_col for k in ["TOTAL", "SUM", "COUNT"]) else df[num_col].mean())
-                            val_str = f"${val:,.2f}" if isinstance(val, float) and val % 1 != 0 else f"{val:,}" if isinstance(val, (int, float)) else str(val)
-                            label = ("Total " if len(df) > 1 and any(k in num_col for k in ["TOTAL", "SUM", "COUNT"]) else "") + num_col.replace('_', ' ').title()
-                            st.metric(label=label, value=val_str)
-                else:
-                    try:
-                        if text_cols:
-                            chart_df = df.set_index(text_cols[0])[numeric_cols[:3]]
-                        else:
-                            chart_df = df[numeric_cols]
-                        
-                        if chart_type == "Bar Chart":
-                            st.bar_chart(chart_df, use_container_width=True)
-                        elif chart_type == "Line Chart":
-                            st.line_chart(chart_df, use_container_width=True)
-                        elif chart_type == "Area Chart":
-                            st.area_chart(chart_df, use_container_width=True)
-                    except Exception as err:
-                        st.warning(f"Chart render note: {err}")
+            render_interactive_chart(df, key_prefix=f"vis_{msg_key_prefix}")
 
             st.markdown("### 📋 Full Result Dataset")
             st.dataframe(df, use_container_width=True)
@@ -1418,6 +1493,96 @@ def render_assistant_response(msg_dict, msg_key_prefix=""):
                 mime="text/csv",
                 key=f"dl_tab_{msg_key_prefix}_{id(msg_dict)}"
             )
+        tab_idx += 1
+
+    if has_sql:
+        with tabs[tab_idx]:
+            st.markdown("### 🔍 Snowflake SQL Query")
+            st.code(sql_query, language="sql")
+            
+            # Action controls to execute query live from UI
+            col_run, col_edit, col_meta = st.columns([3, 2.5, 4.5])
+            h_suffix = abs(hash(sql_query)) % 100000
+            run_key = f"btn_run_sql_{msg_key_prefix}_{h_suffix}"
+            edit_toggle_key = f"toggle_edit_sql_{msg_key_prefix}_{h_suffix}"
+            state_res_key = f"sql_run_result_{msg_key_prefix}_{h_suffix}"
+            
+            with col_run:
+                run_clicked = st.button("▶ Run Query in Snowflake", key=run_key, type="primary", use_container_width=True)
+            with col_edit:
+                show_editor = st.checkbox("✏️ Edit Query", key=edit_toggle_key)
+            with col_meta:
+                target_db_name = env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
+                st.caption(f"⚡ Target: `{target_db_name}` • Warehouse: `COMPUTE_WH`")
+
+            custom_sql = sql_query
+            if show_editor:
+                custom_sql = st.text_area(
+                    "Modify SQL query before executing:",
+                    value=sql_query,
+                    height=130,
+                    key=f"txt_sql_editor_{msg_key_prefix}_{h_suffix}"
+                )
+                if st.button("▶ Execute Modified Query", key=f"btn_run_custom_{msg_key_prefix}_{h_suffix}", type="secondary"):
+                    run_clicked = True
+
+            if run_clicked:
+                try:
+                    import time
+                    with st.spinner("❄️ Executing SQL query in Snowflake..."):
+                        t0 = time.time()
+                        clean_run_sql = backend_service.sanitize_semantic_view_sql(custom_sql, db=target_db_name) if hasattr(backend_service, "sanitize_semantic_view_sql") else custom_sql
+                        exec_mgr = cached_sf_mgr if 'cached_sf_mgr' in locals() and cached_sf_mgr else backend_service.snowflake_manager
+                        exec_data, exec_cols = exec_mgr.execute_query(clean_run_sql)
+                        dur = time.time() - t0
+                        st.session_state[state_res_key] = {
+                            "data": exec_data,
+                            "columns": exec_cols,
+                            "duration": dur,
+                            "sql": clean_run_sql,
+                            "error": None
+                        }
+                except Exception as sql_exec_err:
+                    st.session_state[state_res_key] = {
+                        "data": None,
+                        "columns": None,
+                        "duration": 0,
+                        "sql": custom_sql,
+                        "error": str(sql_exec_err)
+                    }
+
+            # Render query results when available
+            if state_res_key in st.session_state:
+                res_state = st.session_state[state_res_key]
+                if res_state.get("error"):
+                    st.error(f"❌ Snowflake Query Error: {res_state['error']}")
+                elif res_state.get("data") is not None:
+                    e_data = res_state["data"]
+                    e_cols = res_state["columns"]
+                    e_dur = res_state["duration"]
+                    e_df = pd.DataFrame(e_data) if e_data else pd.DataFrame(columns=e_cols)
+                    
+                    st.success(f"✅ Executed successfully in **{e_dur:.2f}s** • Returned **{len(e_df):,}** rows")
+                    
+                    # Live Data Table
+                    st.markdown("##### 📋 Query Results")
+                    st.dataframe(e_df, use_container_width=True)
+                    
+                    # Interactive Chart
+                    if not e_df.empty:
+                        render_interactive_chart(e_df, key_prefix=f"live_chart_{msg_key_prefix}_{h_suffix}")
+                        
+                        csv_dl = e_df.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📥 Export Query Result as CSV",
+                            data=csv_dl,
+                            file_name="snowflake_query_result.csv",
+                            mime="text/csv",
+                            key=f"dl_live_{msg_key_prefix}_{h_suffix}"
+                        )
+                else:
+                    st.info("Query executed successfully. (0 rows returned)")
+        tab_idx += 1
 
 
 # ---------------------------------------------------------
@@ -1432,7 +1597,7 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
     # ---------------------------------------------------------
     st.markdown("""
         <div class="section-header-banner" style="margin-top: 24px;">
-            <div class="section-title">🗺️ Interactive US Risk & Premium Map</div>
+            <div class="section-title">🗺️ US Risk & Premium Map</div>
             <div class="section-badge">Live Geospatial Cross-Filter</div>
         </div>
     """, unsafe_allow_html=True)
@@ -2147,35 +2312,52 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
         
         # Check if an attachment should be merged into prompt
         attached_doc_label = st.session_state.uploaded_doc_name
-        
-        # Query Snowflake Cortex Search Service (INSURANCE_SEARCH_SVC) for top chunks
-        cortex_chunks = backend_service.search_cortex_documents(
-            query=user_prompt, 
-            limit=3, 
-            filter_file=attached_doc_label, 
-            mgr=cached_sf_mgr
-        )
         search_context = ""
-        if cortex_chunks:
-            search_context = "\n[SNOWFLAKE CORTEX SEARCH KNOWLEDGE]:\n" + "\n---\n".join([
-                f"(From {c.get('FILE_NAME', 'DOC')} - {c.get('DOC_TYPE', 'DOC')}):\n{c.get('CHUNK_TEXT', '')}"
-                for c in cortex_chunks
-            ])
-
-        if st.session_state.uploaded_doc_text:
-            combined_prompt = f"""[ATTACHED CONTEXT - {st.session_state.uploaded_doc_summary} (Stored in Snowflake @DOC_STAGE)]:
-{st.session_state.uploaded_doc_text[:15000]}
+        
+        if attached_doc_label:
+            # ATTACHED FILE STRICT SCOPING: User has an active attached document.
+            # Fetch relevant chunks strictly for this document from Snowflake Cortex
+            cortex_chunks = backend_service.search_cortex_documents(
+                query=user_prompt, 
+                limit=8, 
+                filter_file=attached_doc_label, 
+                mgr=cached_sf_mgr
+            )
+            if cortex_chunks:
+                search_context = f"\n[ATTACHED DOCUMENT CONTEXT - {attached_doc_label}]:\n" + "\n---\n".join([
+                    f"(Chunk {c.get('CHUNK_INDEX', 0)} of {c.get('FILE_NAME', attached_doc_label)}):\n{c.get('CHUNK_TEXT', '')}"
+                    for c in cortex_chunks
+                ])
+            doc_text_snippet = f"\n{st.session_state.uploaded_doc_text[:12000]}" if st.session_state.uploaded_doc_text else ""
+            combined_prompt = f"""[ATTACHED CONTEXT - {attached_doc_label} (Stored in Snowflake @DOC_STAGE)]:
+{doc_text_snippet}
 {search_context}
 
 [USER QUESTION / INSTRUCTION]:
 {user_prompt}"""
-        elif search_context:
-            combined_prompt = f"""{search_context}
+        else:
+            is_forecast_or_scenario = backend_service.is_demand_forecasting_query(user_prompt) or backend_service.is_scenario_query(user_prompt)
+            is_analytics = backend_service.is_analytical_query(user_prompt) or is_forecast_or_scenario
+            if not is_forecast_or_scenario and not is_analytics and backend_service.is_document_query(user_prompt):
+                cortex_chunks = backend_service.search_cortex_documents(
+                    query=user_prompt, 
+                    limit=5, 
+                    filter_file=None, 
+                    mgr=cached_sf_mgr
+                )
+                if cortex_chunks:
+                    search_context = "\n[SNOWFLAKE CORTEX SEARCH KNOWLEDGE]:\n" + "\n---\n".join([
+                        f"(From {c.get('FILE_NAME', 'DOC')} - {c.get('DOC_TYPE', 'DOC')}):\n{c.get('CHUNK_TEXT', '')}"
+                        for c in cortex_chunks
+                    ])
+                    combined_prompt = f"""{search_context}
 
 [USER QUESTION / INSTRUCTION]:
 {user_prompt}"""
-        else:
-            combined_prompt = user_prompt
+                else:
+                    combined_prompt = user_prompt
+            else:
+                combined_prompt = user_prompt
 
         st.session_state.messages.append({
             "role": "user",
