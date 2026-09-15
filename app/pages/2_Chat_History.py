@@ -96,7 +96,6 @@ with st.sidebar:
                 <div class="sidebar-brand-title">❄ INSIGHT AI</div>
                 <span class="sidebar-live-pill">● ARCHIVE</span>
             </div>
-            <div class="sidebar-brand-sub">Snowflake Intelligence Suite</div>
         </div>
     """, unsafe_allow_html=True)
 

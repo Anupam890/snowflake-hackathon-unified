@@ -58,7 +58,9 @@ DOCUMENT_KEYWORDS = [
     "according to", "in the pdf", "uploaded file", "meridian blue", "nakamura", "jennifer",
     "section", "article", "who is", "what does the document", "what does the policy say",
     "what does the contract", "summarize the document", "summarize the policy", "summarize the manual",
-    "eligibility requirement", "grace period", "endorsement", "coverage details"
+    "eligibility requirement", "grace period", "endorsement", "coverage details",
+    "bank", "loan", "lender", "borrower", "interest rate", "emi", "guarantor", "disbursement",
+    "sanction", "tenure", "pan number", "aadhaar", "national trust", "amit sharma", "name of the bank"
 ]
 
 ANALYTICAL_KEYWORDS = [
@@ -72,6 +74,19 @@ ANALYTICAL_KEYWORDS = [
     "data issue", "data trust", "severity", "threshold", "pass rate", "failed value"
 ]
 
+DEMAND_FORECASTING_KEYWORDS = [
+    "demand forecast", "forecast demand", "demand forecasting", "future demand", "forecast for",
+    "projected policies", "predict demand", "policy forecast", "horizon", "next 3 months",
+    "next 6 months", "next 12 months", "future policies", "growth forecast", "forecast new policies",
+    "demand", "forecast"
+]
+
+SCENARIO_SIMULATION_KEYWORDS = [
+    "what happens if", "what if", "simulate", "simulation", "increase premium", "decrease premium",
+    "rate change", "premium increase", "rate simulator", "impact of increasing", "impact of decreasing",
+    "bronze health", "premiums by", "sensitivity analysis", "elasticity"
+]
+
 
 def is_document_query(prompt: str) -> bool:
     """Detects whether a user prompt is asking about unstructured document knowledge or attachments."""
@@ -81,12 +96,32 @@ def is_document_query(prompt: str) -> bool:
     return any(k in p for k in DOCUMENT_KEYWORDS)
 
 
+def is_demand_forecasting_query(prompt: str) -> bool:
+    """Detects whether a user prompt is asking about demand forecasting or time-series policy projections."""
+    if not prompt:
+        return False
+    p = prompt.lower()
+    return any(k in p for k in DEMAND_FORECASTING_KEYWORDS)
+
+
+def is_scenario_query(prompt: str) -> bool:
+    """Detects whether a user prompt is asking for scenario / rate change / what-if simulations."""
+    if not prompt:
+        return False
+    p = prompt.lower()
+    return any(k in p for k in SCENARIO_SIMULATION_KEYWORDS)
+
+
 def is_analytical_query(prompt: str) -> bool:
     """Detects whether a user prompt is asking for quantitative/analytical aggregation on database tables."""
     if not prompt:
         return False
     p = prompt.lower()
     
+    # Demand forecasting and what-if simulation queries are strictly analytical/agent tasks
+    if is_demand_forecasting_query(p) or is_scenario_query(p):
+        return True
+
     # If explicitly asking about document/subscriber/clauses, prioritize document search unless explicitly asking to aggregate
     if is_document_query(p):
         has_aggregation = any(k in p for k in ["total premium", "sum of", "average premium", "count of", "by state", "loss ratio by"])
@@ -106,12 +141,63 @@ def extract_sql_from_text(text: str) -> Optional[str]:
         sql = match.group(1).strip()
         if not sql.endswith(";"):
             sql += ";"
-        return sql
-    # 2. Match un-fenced SELECT/WITH query
-    raw_match = re.search(r"((?:SELECT|WITH)\s+[\s\S]+?;)", text, re.IGNORECASE)
+        if re.search(r"\bFROM\b", sql, re.IGNORECASE):
+            return sql
+    # 2. Match un-fenced SELECT/WITH query that contains a FROM clause
+    raw_match = re.search(r"((?:SELECT|WITH)\s+[\s\S]+?\bFROM\b[\s\S]+?;)", text, re.IGNORECASE)
     if raw_match:
-        return raw_match.group(1).strip()
+        sql = raw_match.group(1).strip()
+        # Verify it doesn't look like general English markdown text
+        if not any(stop_phrase in sql.lower() for stop_phrase in ["confidence bounds", "summary by", "takeaways", "policy type", "horizon"]):
+            return sql
     return None
+
+
+def clean_text_encoding(text: str) -> str:
+    """Fixes mojibake artifacts caused by UTF-8 bytes mistakenly decoded as Latin-1/Windows-1252."""
+    if not text:
+        return ""
+    # 1. Round-trip re-decode if text was mis-decoded from utf-8 as latin1
+    try:
+        if any(bad in text for bad in ["â", "Â", "Ã"]):
+            fixed = text.encode("latin-1").decode("utf-8")
+            return fixed
+    except Exception:
+        pass
+
+    # 2. Targeted replacement of common mojibake characters
+    replacements = [
+        ("â€“", "–"),    # En dash
+        ("â€”", "—"),    # Em dash
+        ("â†’", "→"),    # Right arrow
+        ("â€™", "'"),    # Right single quotation / apostrophe
+        ("â€˜", "'"),    # Left single quotation
+        ("â€œ", '"'),    # Left double quotation
+        ("â€\x9d", '"'), # Right double quotation
+        ("â€", '"'),    # Right double quotation
+        ("â€•", "—"),    # Horizontal bar
+        ("â€¢", "•"),    # Bullet point
+        ("â€¦", "…"),    # Ellipsis
+        ("â‰¥", "≥"),    # Greater than or equal to
+        ("â‰¤", "≤"),    # Less than or equal to
+        ("âœ”", "✔"),    # Check mark
+        ("âœ–", "✖"),    # Cross mark
+        ("Â ", " "),     # Non-breaking space artifact
+        ("Â", ""),       # Stray Latin-1 artifact
+    ]
+    cleaned = text
+    for bad, good in replacements:
+        cleaned = cleaned.replace(bad, good)
+    return cleaned
+
+
+def remove_recommended_next_steps(text: str) -> str:
+    """Strips 'Recommended next steps:' and any following recommendations from forecast responses."""
+    if not text:
+        return ""
+    pattern = r'(?:\n|^)(?:#{1,4}\s*)?(?:\*{0,2})Recommended\s+(?:next\s+)?steps?:?.*?(?=(?:\n#{1,4}\s|\n```|\Z))'
+    cleaned = re.sub(pattern, '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+    return cleaned
 
 
 def parse_sse_stream(sse_text: str):
@@ -122,6 +208,9 @@ def parse_sse_stream(sse_text: str):
     sql_candidates = []
     warnings = []
     final_response = None
+    table_data = None
+    table_columns = None
+    chart_spec = None
 
     lines = sse_text.strip().split("\n")
     current_event = None
@@ -167,6 +256,44 @@ def parse_sse_stream(sse_text: str):
                         for k in ["query", "sql", "statement"]:
                             if k in t_input and t_input[k]:
                                 sql_candidates.append(t_input[k])
+                elif current_event == "response.tool_result":
+                    content_list = data_json.get("content", [])
+                    for c_item in content_list:
+                        if isinstance(c_item, dict):
+                            json_data = c_item.get("json", {})
+                            if isinstance(json_data, dict):
+                                for k in ["query", "sql", "statement"]:
+                                    if k in json_data and json_data[k]:
+                                        sql_candidates.append(json_data[k])
+                elif current_event == "response.table":
+                    result_set = data_json.get("result_set", {})
+                    raw_rows = result_set.get("data", [])
+                    row_type = result_set.get("resultSetMetaData", {}).get("rowType", [])
+                    col_names = [col.get("name") for col in row_type] if row_type else []
+                    
+                    extracted_rows = []
+                    for r in raw_rows:
+                        row_dict = {}
+                        for i, val in enumerate(r):
+                            c_name = col_names[i] if i < len(col_names) else f"COL_{i}"
+                            if isinstance(val, str):
+                                try:
+                                    if "." in val:
+                                        val = float(val)
+                                    else:
+                                        val = int(val)
+                                except (ValueError, TypeError):
+                                    pass
+                            row_dict[c_name] = val
+                        extracted_rows.append(row_dict)
+                    
+                    if extracted_rows:
+                        table_data = extracted_rows
+                        table_columns = col_names
+                elif current_event == "response.chart":
+                    spec = data_json.get("chart_spec")
+                    if spec:
+                        chart_spec = spec
                 elif current_event == "response.warning":
                     warnings.append(data_json)
             except Exception:
@@ -185,7 +312,47 @@ def parse_sse_stream(sse_text: str):
     if sql_candidates and not extract_sql_from_text(full_text):
         full_text += f"\n\n```sql\n{sql_candidates[0].strip()}\n```"
 
-    return full_text.strip(), thinking_text.strip(), warnings, final_response
+    # Clean any mojibake characters in text and thinking
+    full_text = clean_text_encoding(full_text.strip())
+    thinking_text = clean_text_encoding(thinking_text.strip())
+
+    return full_text, thinking_text, warnings, final_response, table_data, table_columns, chart_spec
+
+
+def sanitize_semantic_view_sql(sql: str, db: str = "UNIFIEDAI_DB") -> str:
+    """
+    Translates Cortex Agent / Analyst semantic view virtual table references (__table)
+    to actual Snowflake schema-qualified physical tables so queries can be executed and inspected directly.
+    """
+    if not sql:
+        return ""
+    
+    target_db = db or env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
+    
+    table_map = {
+        r"\b__policies\b": f"{target_db}.CORE.POLICIES",
+        r"\b__customers\b": f"{target_db}.CORE.CUSTOMERS",
+        r"\b__claims\b": f"{target_db}.CORE.CLAIMS",
+        r"\b__agents\b": f"{target_db}.CORE.AGENTS",
+        r"\b__plan_tiers\b": f"{target_db}.PREMIUM.PLAN_TIERS",
+        r"\b__premium_calculations\b": f"{target_db}.PREMIUM.PREMIUM_CALCULATIONS",
+        r"\b__premium_factors\b": f"{target_db}.PREMIUM.PREMIUM_FACTORS",
+        r"\b__at_risk_policies\b": f"{target_db}.RISK.AT_RISK_POLICIES",
+        r"\b__churn_predictions\b": f"{target_db}.RISK.CHURN_PREDICTIONS",
+        r"\b__risk_factors\b": f"{target_db}.RISK.RISK_FACTORS",
+        r"\b__claims_kpi\b": f"{target_db}.ANALYTICS.CLAIMS_KPI",
+        r"\b__fraud_alerts\b": f"{target_db}.ANALYTICS.FRAUD_ALERTS",
+        r"\b__loss_ratio_history\b": f"{target_db}.ANALYTICS.LOSS_RATIO_HISTORY",
+        r"\b__policy_trends\b": f"{target_db}.ANALYTICS.POLICY_TRENDS",
+        r"\b__dq_rules\b": f"{target_db}.UNIFIEDAI_SH.DQ_RULES",
+        r"\b__dq_validation_results\b": f"{target_db}.UNIFIEDAI_SH.DQ_VALIDATION_RESULTS"
+    }
+    
+    translated = sql
+    for pat, real_tbl in table_map.items():
+        translated = re.sub(pat, real_tbl, translated, flags=re.IGNORECASE)
+    
+    return translated
 
 
 
@@ -1158,27 +1325,97 @@ def execute_cortex_agent_workflow(
 
     # 1. Clean query text and extract attached file reference if present
     clean_p = prompt.split("[USER QUESTION / INSTRUCTION]:")[-1].strip() if "[USER QUESTION / INSTRUCTION]:" in prompt else prompt
-    analytical = is_analytical_query(clean_p)
-
-    if not attached_file and "[ATTACHED CONTEXT" in prompt:
-        match = re.search(r'\[ATTACHED CONTEXT - (?:PDF Document|CSV Dataset|Excel Spreadsheet|Text File|File)?[:\s]*([^\(\]\n]+)', prompt, re.IGNORECASE)
-        if match:
-            cand = match.group(1).strip()
-            if cand.endswith(('.pdf', '.csv', '.xlsx', '.xls', '.txt', '.json', '.md')):
-                attached_file = cand
+    
+    # Extract attached file if not explicitly passed
     if not attached_file:
+        match = re.search(r'\[ATTACHED (?:CONTEXT|DOCUMENT)[^\]]*?[:\s-]*([a-zA-Z0-9_\-\.]+\.(?:pdf|csv|xlsx|xls|txt|json|md))', prompt, re.IGNORECASE)
+        if match:
+            attached_file = match.group(1).strip()
+        elif "[ATTACHED CONTEXT" in prompt:
+            cand_m = re.search(r'\[ATTACHED CONTEXT - (?:PDF Document|CSV Dataset|Excel Spreadsheet|Text File|File)?[:\s]*([^\(\]\n]+)', prompt, re.IGNORECASE)
+            if cand_m:
+                cand = cand_m.group(1).strip()
+                if cand.endswith(('.pdf', '.csv', '.xlsx', '.xls', '.txt', '.json', '.md')):
+                    attached_file = cand
+
+    # 2. PRIORITY: If an attached file is active, user questions are answered EXCLUSIVELY from that document!
+    # Bypasses analytical / SQL / forecast routes so user queries strictly target the uploaded file.
+    if attached_file:
+        try:
+            doc_chunks = search_cortex_documents(clean_p, limit=8, filter_file=attached_file, mgr=manager)
+            if doc_chunks:
+                context = "\n---\n".join([f"(Chunk {c.get('CHUNK_INDEX', 0)} of {c.get('FILE_NAME', attached_file)}):\n{c.get('CHUNK_TEXT', '')}" for c in doc_chunks])
+                src_file = doc_chunks[0].get("FILE_NAME", attached_file)
+                sim_pct = int(doc_chunks[0].get("SIMILARITY_SCORE", 0) * 100) if doc_chunks[0].get("SIMILARITY_SCORE") else 85
+
+                doc_qa_prompt = f"""You are an expert Document Intelligence Assistant. The user has attached the document '{src_file}'.
+Your task is to answer the user's question directly, accurately, and factually using ONLY the provided excerpts from '{src_file}'.
+
+RULES:
+1. Base your answer EXCLUSIVELY on the provided excerpts from '{src_file}'.
+2. Cite key factual entities, dates, loan amounts, interest rates, borrower/lender names, or terms found in the excerpts.
+3. Do NOT make up information or reference unrelated insurance tables/databases.
+4. If the information is not present in the excerpts, state clearly: "The attached document '{src_file}' does not contain information regarding this."
+
+Document Excerpts ({src_file}):
+{context}
+
+Question: {clean_p}
+Direct Answer:"""
+
+                esc_dqp = doc_qa_prompt.replace("'", "''")
+                qa_sql = f"SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3.1-70b', '{esc_dqp}') AS QA_ANS;"
+                qa_res, _ = manager.execute_query(qa_sql)
+                
+                if qa_res and qa_res[0].get("QA_ANS"):
+                    ans_text = qa_res[0]["QA_ANS"].strip()
+                    ans_with_source = f"{ans_text}\n\n---\n*📄 Source: `{src_file}` (Snowflake Cortex Arctic Vector Search • Relevance: {sim_pct}%)*"
+                    thinking = (
+                        f"1. **Attached Document Analysis**: Scoped query strictly to attached file `{src_file}`.\n"
+                        f"2. **Vector Retrieval**: Snowflake Cortex Vector Search retrieved {len(doc_chunks)} chunks from `{src_file}` (including preamble Chunk 0).\n"
+                        f"3. **Factual Extraction**: Extracted exact answers directly from the attached document text via Llama 3.1 70B."
+                    )
+                    return {
+                        "status": "success",
+                        "agent": agent,
+                        "database": db,
+                        "schema": schema,
+                        "model": model,
+                        "engine": "CORTEX_SEARCH",
+                        "response": ans_with_source,
+                        "thinking": thinking,
+                        "sql_query": None,
+                        "data": None,
+                        "columns": None,
+                        "warnings": None,
+                        "metadata": {
+                            "database": db,
+                            "schema": schema,
+                            "agent": agent,
+                            "engine": "CORTEX_SEARCH",
+                            "source_file": src_file,
+                            "chunks_retrieved": len(doc_chunks)
+                        }
+                    }
+        except Exception as rag_err:
+            print(f"[Attached Document Direct Pipeline Note]: {rag_err}")
+
+    # 3. If NO attached file is active, classify into Unstructured Knowledge vs Analytical / SQL
+    analytical = is_analytical_query(clean_p)
+    forecast_or_scenario = is_demand_forecasting_query(clean_p) or is_scenario_query(clean_p)
+
+    target_doc = None
+    if not forecast_or_scenario and not analytical and is_document_query(clean_p):
         for fn in ["Insurance_policies.pdf", "UNIFIED_INSURANCE_POLICY_MANUAL.pdf", "contracts.pdf", "sops.pdf"]:
             if fn.lower() in prompt.lower():
-                attached_file = fn
+                target_doc = fn
                 break
 
-    # 2. If this is a document / factual inquiry or an attached file is present, execute Cortex Search (RAG) vector retrieval first
-    if not analytical or attached_file:
         try:
-            doc_chunks = search_cortex_documents(clean_p, limit=4, filter_file=attached_file, mgr=manager)
+            doc_chunks = search_cortex_documents(clean_p, limit=8, filter_file=target_doc, mgr=manager)
             if doc_chunks and (doc_chunks[0].get("SIMILARITY_SCORE", 0) > 0.35 or len(doc_chunks) > 0):
                 context = "\n---\n".join([f"(From {c.get('FILE_NAME', 'Document')}):\n{c.get('CHUNK_TEXT', '')}" for c in doc_chunks])
-                src_file = doc_chunks[0].get("FILE_NAME", attached_file or "Document")
+                src_file = doc_chunks[0].get("FILE_NAME", target_doc or "Document")
                 sim_pct = int(doc_chunks[0].get("SIMILARITY_SCORE", 0) * 100) if doc_chunks[0].get("SIMILARITY_SCORE") else 80
 
                 doc_qa_prompt = f"""You are an Insurance Enterprise Assistant. Answer the question directly, factually, and accurately using ONLY the provided document knowledge.
@@ -1227,7 +1464,7 @@ Direct Answer:"""
         except Exception as rag_err:
             print(f"[Document RAG Direct Pipeline Note]: {rag_err}")
 
-    # 3. Live Snowflake Cortex Agent REST endpoint attempt for analytical inquiries
+    # 3. Live Snowflake Cortex Agent REST endpoint attempt for analytical / forecast inquiries
     try:
         token, host = manager.get_session_token()
         if token and host:
@@ -1235,29 +1472,46 @@ Direct Answer:"""
             headers = {
                 "Authorization": f'Snowflake Token="{token}"',
                 "Content-Type": "application/json",
-                "Accept": "application/json"
+                "Accept": "text/event-stream"
             }
+            # For demand forecasting and what-if simulation, send the clean query text directly to Cortex Agent
+            effective_prompt = clean_p if forecast_or_scenario else prompt
             request_body = {
                 "model": model,
-                "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+                "messages": [{"role": "user", "content": [{"type": "text", "text": effective_prompt}]}]
             }
-            sf_res = requests.post(url, headers=headers, json=request_body, timeout=12)
+            sf_res = requests.post(url, headers=headers, json=request_body, timeout=65)
             if sf_res.status_code == 200:
-                parsed_text, thinking, warnings, final_resp = parse_sse_stream(sf_res.text)
+                raw_sse = sf_res.content.decode("utf-8", errors="replace")
+                parsed_text, thinking, warnings, final_resp, stream_table, stream_cols, stream_chart = parse_sse_stream(raw_sse)
                 if thinking and thinking.strip():
                     thinking_output = thinking.strip()
                 warnings_list = warnings
-                if parsed_text and len(parsed_text.strip()) > 0 and "couldn't find" not in parsed_text.lower():
-                    response_text = parsed_text
-                    sql_query = extract_sql_from_text(parsed_text)
-                    if sql_query:
-                        query_data, columns = manager.execute_query(sql_query)
+                if parsed_text and len(parsed_text.strip()) > 0:
+                    response_text = clean_text_encoding(parsed_text)
+                    if forecast_or_scenario:
+                        response_text = remove_recommended_next_steps(response_text)
+                    raw_sql = extract_sql_from_text(parsed_text)
+                    if raw_sql:
+                        sql_query = sanitize_semantic_view_sql(raw_sql, db=db)
+                        # Replace virtual __table names in response text so user gets valid, executable SQL
+                        response_text = response_text.replace(raw_sql, sql_query)
+                    
+                    # 1. Use precomputed, verified table data directly from Cortex Agent stream
+                    if stream_table and stream_cols:
+                        query_data = stream_table
+                        columns = stream_cols
+                    # 2. Or execute sanitized SQL directly on Snowflake if stream table wasn't included
+                    elif sql_query:
+                        try:
+                            query_data, columns = manager.execute_query(sql_query)
+                        except Exception as sq_err:
+                            print(f"[Agent SQL Execution Note]: {sq_err}")
     except Exception as e:
         print(f"[BackendService Cortex Bridge] Note: {e}")
 
-    # 4. Fallback for Analytical Query:
-    needs_sql_enrichment = analytical and (not sql_query or not query_data or len(query_data) == 0)
-    if not response_text or "unable to retrieve" in response_text.lower() or "couldn't find" in response_text.lower() or needs_sql_enrichment:
+    # 4. Fallback only if agent response is completely missing or failed
+    if not response_text or len(response_text.strip()) == 0 or "unable to retrieve" in response_text.lower():
         if analytical:
             nl_resp, executed_sql, res_data, res_cols, gen_thinking = generate_insurance_analytics_response(clean_p, db, mgr=manager)
             
@@ -1265,11 +1519,7 @@ Direct Answer:"""
                 sql_query = executed_sql
                 query_data = res_data
                 columns = res_cols
-                if not response_text or len(response_text) < 180 or "next step" in response_text.lower() or "break this down" in response_text.lower() or "unable" in response_text.lower():
-                    response_text = nl_resp
-                else:
-                    if nl_resp not in response_text:
-                        response_text = f"{nl_resp}\n\n{response_text}"
+                response_text = nl_resp
                 if not thinking_output:
                     thinking_output = gen_thinking
         else:
@@ -1292,8 +1542,7 @@ Answer the user's question accurately, directly, and concisely using the provide
             except Exception as llm_err:
                 print(f"[Document QA LLM Fallback Error]: {llm_err}")
 
-    engine_tag = "CORTEX_ANALYST" if (sql_query or analytical) else "CORTEX_SEARCH"
-
+    engine_tag = "CORTEX_ANALYST" if (sql_query or analytical or forecast_or_scenario) else "CORTEX_SEARCH"
 
     return {
         "status": "success",
@@ -1313,7 +1562,8 @@ Answer the user's question accurately, directly, and concisely using the provide
             "schema": schema,
             "agent": agent,
             "engine": engine_tag,
-            "rows_returned": len(query_data) if query_data else 0
+            "rows_returned": len(query_data) if query_data else 0,
+            "chart_spec": stream_chart if 'stream_chart' in locals() and stream_chart else None
         }
     }
 
@@ -1487,20 +1737,21 @@ def chunk_and_ingest_document(
 
 def search_cortex_documents(
     query: str,
-    limit: int = 4,
+    limit: int = 8,
     filter_file: Optional[str] = None,
     mgr: Optional[SnowflakeManager] = None
 ) -> List[Dict[str, Any]]:
     """
     Searches Snowflake DOCUMENT_CHUNKS using native Snowflake Cortex Arctic Vector Embeddings
     (SNOWFLAKE.CORTEX.EMBED_TEXT_768) and VECTOR_COSINE_SIMILARITY for real-time document search.
-    If filter_file is provided, scopes the search strictly to chunks from that specific document.
+    If filter_file is provided, scopes search strictly to that document and guarantees Chunk 0 (Preamble) is included.
     """
     manager = mgr or snowflake_manager
     db = env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
     sh = env_config.get("SNOWFLAKE_SH", "UNIFIEDAI_SH")
     
     clean_q = query.replace("'", "''")
+    target_limit = max(limit, 8)
     
     # 1. Scoped Vector Search on specifically targeted file (e.g. attached document)
     if filter_file:
@@ -1514,15 +1765,42 @@ def search_cortex_documents(
                 DOC_TYPE,
                 VECTOR_COSINE_SIMILARITY(EMBEDDING, SNOWFLAKE.CORTEX.EMBED_TEXT_768('snowflake-arctic-embed-m-v1.5', '{clean_q}')) AS SIMILARITY_SCORE
             FROM {db}.{sh}.DOCUMENT_CHUNKS
-            WHERE EMBEDDING IS NOT NULL AND LOWER(FILE_NAME) = LOWER('{clean_target}')
+            WHERE EMBEDDING IS NOT NULL AND (LOWER(FILE_NAME) = LOWER('{clean_target}') OR LOWER(FILE_NAME) LIKE LOWER('%{clean_target}%'))
             ORDER BY SIMILARITY_SCORE DESC
-            LIMIT {limit};
+            LIMIT {target_limit};
             """
             s_rows, _ = manager.execute_query(scoped_sql)
-            if s_rows and len(s_rows) > 0:
-                return s_rows
+            s_rows = s_rows or []
+
+            # Ensure Chunk 0 (Document Title, Institution, Parties, Date) is always included
+            if not any(c.get("CHUNK_INDEX") == 0 for c in s_rows):
+                c0_sql = f"""
+                SELECT FILE_NAME, CHUNK_TEXT, CHUNK_INDEX, DOC_TYPE, 1.0 AS SIMILARITY_SCORE
+                FROM {db}.{sh}.DOCUMENT_CHUNKS
+                WHERE (LOWER(FILE_NAME) = LOWER('{clean_target}') OR LOWER(FILE_NAME) LIKE LOWER('%{clean_target}%')) AND CHUNK_INDEX = 0
+                LIMIT 1;
+                """
+                c0_res, _ = manager.execute_query(c0_sql)
+                if c0_res:
+                    s_rows.insert(0, c0_res[0])
+
+            # If vector similarity produced no rows, retrieve sequential chunks of this document directly
+            if not s_rows:
+                seq_sql = f"""
+                SELECT FILE_NAME, CHUNK_TEXT, CHUNK_INDEX, DOC_TYPE, 1.0 AS SIMILARITY_SCORE
+                FROM {db}.{sh}.DOCUMENT_CHUNKS
+                WHERE LOWER(FILE_NAME) = LOWER('{clean_target}') OR LOWER(FILE_NAME) LIKE LOWER('%{clean_target}%')
+                ORDER BY CHUNK_INDEX ASC
+                LIMIT {target_limit};
+                """
+                seq_res, _ = manager.execute_query(seq_sql)
+                s_rows = seq_res or []
+
+            # STRICT ATTACHMENT ISOLATION: When filter_file is provided, return ONLY chunks from that file. Never fall back to other files!
+            return s_rows
         except Exception as scoped_err:
             print(f"[Cortex Scoped Vector Search Note]: {scoped_err}")
+            return []
 
     # 2. Primary: Direct Snowflake Cortex Vector Similarity Search (global)
     try:
@@ -1536,7 +1814,7 @@ def search_cortex_documents(
         FROM {db}.{sh}.DOCUMENT_CHUNKS
         WHERE EMBEDDING IS NOT NULL
         ORDER BY SIMILARITY_SCORE DESC
-        LIMIT {limit};
+        LIMIT {target_limit};
         """
         rows, cols = manager.execute_query(vector_sql)
         if rows and len(rows) > 0 and rows[0].get("SIMILARITY_SCORE", 0) > 0.35:
@@ -1544,7 +1822,7 @@ def search_cortex_documents(
     except Exception as v_err:
         print(f"[Cortex Vector Search Note]: {v_err}")
 
-    # 2. Secondary: Cortex Search Service REST endpoint (if available)
+    # 3. Secondary: Cortex Search Service REST endpoint (if available)
     try:
         token, host = manager.get_session_token()
         if token and host:
@@ -1557,7 +1835,7 @@ def search_cortex_documents(
             payload = {
                 "query": query,
                 "columns": ["CHUNK_TEXT", "FILE_NAME", "CHUNK_INDEX", "DOC_TYPE"],
-                "limit": limit
+                "limit": target_limit
             }
             res = requests.post(url, headers=headers, json=payload, timeout=6)
             if res.status_code == 200:
@@ -1568,7 +1846,7 @@ def search_cortex_documents(
     except Exception as e:
         print(f"[Cortex Search Service Note]: {e}")
         
-    # 3. Tertiary: Exact keyword fallback on DOCUMENT_CHUNKS
+    # 4. Tertiary: Exact keyword fallback on DOCUMENT_CHUNKS
     try:
         words = [w for w in re.findall(r'\w+', query.lower()) if len(w) > 3][:4]
         like_clauses = " OR ".join([f"LOWER(CHUNK_TEXT) LIKE '%{w}%'" for w in words]) if words else "1=1"
@@ -1577,13 +1855,49 @@ def search_cortex_documents(
         FROM {db}.{sh}.DOCUMENT_CHUNKS 
         WHERE {like_clauses}
         ORDER BY UPLOADED_AT DESC
-        LIMIT {limit};
+        LIMIT {target_limit};
         """
         rows, cols = manager.execute_query(fallback_sql)
         return rows or []
     except Exception as e:
         print(f"[DOCUMENT_CHUNKS Fallback Query Error]: {e}")
         return []
+
+
+def parse_document_with_snowflake_cortex(
+    file_name: str,
+    stage: Optional[str] = None,
+    mgr: Optional[SnowflakeManager] = None
+) -> Optional[str]:
+    """
+    Uses Snowflake native Cortex PARSE_DOCUMENT with built-in OCR and layout analysis
+    to extract full text and tables from scanned/image PDFs stored on stage.
+    """
+    manager = mgr or snowflake_manager
+    db = env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
+    sh = env_config.get("SNOWFLAKE_SH", "UNIFIEDAI_SH")
+    target_stage = stage or f"@{db}.{sh}.DOC_STAGE"
+    clean_fn = os.path.basename(file_name).replace(" ", "_")
+
+    sql = f"""
+    SELECT SNOWFLAKE.CORTEX.PARSE_DOCUMENT(
+        {target_stage},
+        '{clean_fn}',
+        {{'mode': 'LAYOUT'}}
+    ) AS DOC_JSON;
+    """
+    try:
+        rows, _ = manager.execute_query(sql)
+        if rows and rows[0].get("DOC_JSON"):
+            raw_data = rows[0]["DOC_JSON"]
+            data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+            content = data.get("content", "")
+            if content and len(content.strip()) > 0:
+                print(f"[Snowflake PARSE_DOCUMENT]: Extracted {len(content)} characters from {clean_fn} via native OCR.")
+                return content.strip()
+    except Exception as e:
+        print(f"[Snowflake PARSE_DOCUMENT Error]: {e}")
+    return None
 
 
 def upload_and_ingest_pipeline(
@@ -1596,10 +1910,18 @@ def upload_and_ingest_pipeline(
     """
     End-to-end Snowflake Document Ingestion Pipeline:
     1. Uploads file to @DOC_STAGE via Snowflake credentials.
-    2. Chunks text & embeds vectors into DOCUMENT_CHUNKS using CORTEX.EMBED_TEXT_768.
-    3. Verifies indexing with Cortex Search Service INSURANCE_SEARCH_SVC.
+    2. If text extraction is empty/short (scanned PDF), triggers native Snowflake Cortex PARSE_DOCUMENT OCR.
+    3. Chunks text & embeds vectors into DOCUMENT_CHUNKS using CORTEX.EMBED_TEXT_768.
     """
     stage_res = upload_document_to_snowflake_stage(file_bytes=file_bytes, file_name=file_name, mgr=mgr)
+
+    # Automated OCR Fallback for Scanned / Image PDFs
+    if not full_text or len(full_text.strip()) < 100:
+        print(f"[Ingest Pipeline]: Text extraction empty/short for {file_name}. Invoking Snowflake Cortex PARSE_DOCUMENT OCR...")
+        ocr_text = parse_document_with_snowflake_cortex(file_name=file_name, mgr=mgr)
+        if ocr_text:
+            full_text = ocr_text
+
     ingest_res = chunk_and_ingest_document(
         file_name=file_name,
         full_text=full_text,
@@ -1615,7 +1937,8 @@ def upload_and_ingest_pipeline(
         "chunks_count": ingest_res.get("chunks_count", 0),
         "doc_type": ingest_res.get("doc_type", "POLICY"),
         "stage_status": stage_res.get("status"),
-        "ingest_status": ingest_res.get("status")
+        "ingest_status": ingest_res.get("status"),
+        "extracted_text": full_text
     }
 
 
