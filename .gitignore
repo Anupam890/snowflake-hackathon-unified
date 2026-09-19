@@ -8,5 +8,20 @@ wheels/
 
 # Virtual environments
 .venv
+venv/
 
+# Secrets - never commit
 .env
+*.pem
+*.p8
+
+# Logs and local run artifacts
+*.log
+_spec_*.json
+
+# Editor / tooling state
+.snowflake/
+.streamlit/secrets.toml
+.idea/
+.vscode/
+.DS_Store

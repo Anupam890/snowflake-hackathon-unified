@@ -35,13 +35,10 @@ for p in [PROJECT_ROOT, APP_DIR]:
 
 # Load environment configuration
 env_config = {k.strip(): v.strip() for k, v in dotenv_values(os.path.join(PROJECT_ROOT, '.env')).items()}
-API_BASE_URL = env_config.get("API_URL", "http://127.0.0.1:8001")
 
 # Backend & Snowflake Session Management
 from config.snowflake_manager import get_st_cached_snowflake_manager
 import services.backend_service as backend_service
-import importlib
-importlib.reload(backend_service)
 from styles.style_loader import inject_custom_css
 
 # Inject global enterprise stylesheet
@@ -149,7 +146,7 @@ with col_head_ref:
         st.rerun()
 
 # Fetch sessions from Snowflake
-sessions = backend_service.get_all_chat_sessions(mgr=cached_sf_mgr)
+sessions = backend_service.get_all_chat_sessions(user_name=current_user, mgr=cached_sf_mgr)
 
 # If no sessions exist yet
 if not sessions:
@@ -236,7 +233,7 @@ with col_list:
 # Detail Pane: Full Conversation Replayer
 with col_detail:
     current_sess_id = st.session_state.selected_session_id
-    messages = backend_service.get_chat_session_messages(current_sess_id, mgr=cached_sf_mgr)
+    messages = backend_service.get_chat_session_messages(current_sess_id, user_name=current_user, mgr=cached_sf_mgr)
     
     # Session Action Bar
     with st.container(border=True):
@@ -266,7 +263,7 @@ with col_detail:
                     st.switch_page("pages/1_Enterprise_AI.py")
             with b_col2:
                 if st.button("🗑️ Delete", key="btn_del_session", use_container_width=True, type="secondary", help="Delete this session from Snowflake"):
-                    backend_service.delete_chat_session(current_sess_id, mgr=cached_sf_mgr)
+                    backend_service.delete_chat_session(current_sess_id, user_name=current_user, mgr=cached_sf_mgr)
                     st.session_state.selected_session_id = None
                     st.rerun()
 
@@ -300,7 +297,7 @@ with col_detail:
                     if has_sql or has_data:
                         engine_badge = '<span class="engine-badge cortex-analyst-badge">⚡ Snowflake Cortex Analyst</span>'
                     else:
-                        engine_badge = '<span class="engine-badge cortex-search-badge">❄️ Snowflake Cortex Search (RAG)</span>'
+                        engine_badge = '<span class="engine-badge cortex-search-badge">INSIGHT AI</span>'
 
                     header_html = f'<div class="assistant-header-bar" style="margin-bottom:8px;"><div class="assistant-agent-tag"><span class="service-dot"></span>{engine_badge}</div><div class="assistant-model-pill">{msg_model} • {msg_time}</div></div>'
                     st.markdown(header_html, unsafe_allow_html=True)
