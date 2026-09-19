@@ -1,9 +1,9 @@
 import os
 import sys
 import json
+import html
 import datetime
 from typing import Optional, List, Dict, Any, Tuple
-import requests
 import pandas as pd
 import pydeck as pdk
 from dotenv import dotenv_values
@@ -31,17 +31,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from config.snowflake_manager import get_st_cached_snowflake_manager
-from services.server_manager import ensure_backend_server
-import importlib
 import services.backend_service as backend_service
-importlib.reload(backend_service)
+from app.lib.agent_client import call_cortex_agent, fetch_snowflake_status
+from app.lib.render import extract_uploaded_file_content, render_assistant_response
 
 # Load environment configuration
 env_config = {k.strip(): v.strip() for k, v in dotenv_values(os.path.join(PROJECT_ROOT, '.env')).items()}
-API_BASE_URL = env_config.get("API_URL", "http://127.0.0.1:8001")
-
-# Auto-start backend in background daemon thread (single-command unified startup)
-ensure_backend_server()
 
 # Get persistent cached Snowflake manager (reused across all reruns, avoiding Duo prompts)
 cached_sf_mgr = get_st_cached_snowflake_manager()
@@ -936,226 +931,107 @@ st.markdown("""
 # ---------------------------------------------------------
 # Helper Functions & API Clients (Persistent In-Process & Fallback)
 # ---------------------------------------------------------
-@st.cache_data(ttl=25)
-def fetch_snowflake_status(base_url: str = API_BASE_URL):
-    try:
-        # In-process session check with persistent session manager
-        return backend_service.get_snowflake_status(mgr=cached_sf_mgr)
-    except Exception:
-        try:
-            res = requests.get(f"{base_url}/api/snowflake/status", timeout=4)
-            if res.status_code == 200:
-                return res.json()
-        except Exception:
-            pass
-    return {
-        "connected": True,
-        "user": env_config.get("SNOWFLAKE_USERNAME", "UNIFIEDAI"),
-        "role": env_config.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
-        "warehouse": env_config.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
-        "database": env_config.get("SNOWFLAKE_DB", "INSURANCE_MGMT_SYSTEM"),
-        "schema": env_config.get("SNOWFLAKE_SH", "HACKATHON_SH"),
-        "default_agent": env_config.get("INS_AGENT", "INS_ANALYTICS_AGENT")
-    }
 
 
 @st.cache_data(ttl=30)
-def fetch_overview_metrics(base_url: str = API_BASE_URL, state: Optional[str] = None):
+def fetch_overview_metrics(state: Optional[str] = None):
     try:
         # In-process query execution reusing active Snowflake session
         return backend_service.get_dashboard_overview(mgr=cached_sf_mgr, state=state)
     except Exception:
-        try:
-            params = {"state": state} if state and state != "National" else {}
-            res = requests.get(f"{base_url}/api/overview", params=params, timeout=4)
-            if res.status_code == 200:
-                return res.json()
-        except Exception:
-            pass
-    return backend_service.get_dashboard_overview(mgr=None, state=state)
+        return backend_service.get_dashboard_overview(mgr=None, state=state)
 
 
 @st.cache_data(ttl=30)
-def fetch_dts_analytics(base_url: str = API_BASE_URL):
+def fetch_dts_analytics():
     try:
         return backend_service.get_dts_analytics_data(mgr=cached_sf_mgr)
     except Exception:
-        try:
-            res = requests.get(f"{base_url}/api/analytics/dts", timeout=4)
-            if res.status_code == 200:
-                return res.json()
-        except Exception:
-            pass
-    return backend_service.get_dts_analytics_data(mgr=None)
+        return backend_service.get_dts_analytics_data(mgr=None)
 
 
 @st.cache_data(ttl=30)
-def fetch_risk_churn_analytics(base_url: str = API_BASE_URL, state: Optional[str] = None):
+def fetch_risk_churn_analytics(state: Optional[str] = None):
     try:
         return backend_service.get_risk_and_churn_analytics(mgr=cached_sf_mgr, state=state)
     except Exception:
-        try:
-            params = {"state": state} if state and state != "National" else {}
-            res = requests.get(f"{base_url}/api/analytics/risk-churn", params=params, timeout=4)
-            if res.status_code == 200:
-                return res.json()
-        except Exception:
-            pass
-    return backend_service.get_risk_and_churn_analytics(mgr=None, state=state)
+        return backend_service.get_risk_and_churn_analytics(mgr=None, state=state)
 
 
 @st.cache_data(ttl=30)
-def fetch_geospatial_analytics(base_url: str = API_BASE_URL):
+def fetch_geospatial_analytics():
     try:
         return backend_service.get_state_geospatial_analytics(mgr=cached_sf_mgr)
     except Exception:
-        try:
-            res = requests.get(f"{base_url}/api/analytics/geospatial", timeout=4)
-            if res.status_code == 200:
-                return res.json()
-        except Exception:
-            pass
-    return backend_service.get_state_geospatial_analytics(mgr=None)
+        return backend_service.get_state_geospatial_analytics(mgr=None)
 
 
 @st.cache_data(ttl=30)
-def fetch_trend_analytics(base_url: str = API_BASE_URL, state: Optional[str] = None):
+def fetch_trend_analytics(state: Optional[str] = None):
     try:
         return backend_service.get_trend_analytics(mgr=cached_sf_mgr, state=state)
     except Exception:
-        pass
-    return backend_service.get_trend_analytics(mgr=None, state=state)
+        return backend_service.get_trend_analytics(mgr=None, state=state)
 
 
-def extract_uploaded_file_content(uploaded_file):
-    """Extracts clean text and metadata from uploaded PDF, CSV, Excel, TXT, JSON, or images."""
-    if uploaded_file is None:
-        return None, None
-    
-    file_name = uploaded_file.name
-    file_size_kb = uploaded_file.size / 1024
-    file_ext = file_name.split('.')[-1].lower()
-    
-    try:
-        uploaded_file.seek(0)
-        if file_ext == "pdf":
-            extracted_pages = []
-            page_count = 0
-            
-            # 1. Primary: Try PyMuPDF (fitz) - high speed & full vector fidelity
-            try:
-                import fitz
-                uploaded_file.seek(0)
-                doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-                page_count = len(doc)
-                for i, page in enumerate(doc):
-                    t = page.get_text()
-                    if t and t.strip():
-                        extracted_pages.append(f"--- Page {i+1} ---\n{t.strip()}")
-            except Exception as fitz_err:
-                extracted_pages = []
-                
-            # 2. Secondary: Fallback to pypdf
-            if not extracted_pages:
-                try:
-                    import pypdf
-                    uploaded_file.seek(0)
-                    reader = pypdf.PdfReader(uploaded_file)
-                    page_count = len(reader.pages)
-                    for i, page in enumerate(reader.pages):
-                        pt = page.extract_text()
-                        if pt and pt.strip():
-                            extracted_pages.append(f"--- Page {i+1} ---\n{pt.strip()}")
-                except Exception as pypdf_err:
-                    pass
-                    
-            # 3. Tertiary: Fallback to pdfplumber
-            if not extracted_pages:
-                try:
-                    import pdfplumber
-                    uploaded_file.seek(0)
-                    with pdfplumber.open(uploaded_file) as pdf:
-                        page_count = len(pdf.pages)
-                        for i, page in enumerate(pdf.pages):
-                            pt = page.extract_text()
-                            if pt and pt.strip():
-                                extracted_pages.append(f"--- Page {i+1} ---\n{pt.strip()}")
-                except Exception as plumber_err:
-                    pass
-                    
-            full_text = "\n\n".join(extracted_pages)
-            summary = f"PDF Document: {file_name} ({page_count or len(extracted_pages)} pages, {file_size_kb:.1f} KB)"
-            return summary, full_text
-            
-        elif file_ext in ["csv", "tsv"]:
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file)
-            summary = f"CSV Dataset: {file_name} ({len(df)} rows, {len(df.columns)} cols, {file_size_kb:.1f} KB)"
-            text_repr = f"Columns: {', '.join(df.columns)}\n\nSample Records:\n{df.head(15).to_string(index=False)}"
-            return summary, text_repr
-            
-        elif file_ext in ["xlsx", "xls"]:
-            uploaded_file.seek(0)
-            df = pd.read_excel(uploaded_file)
-            summary = f"Excel Spreadsheet: {file_name} ({len(df)} rows, {len(df.columns)} cols, {file_size_kb:.1f} KB)"
-            text_repr = f"Columns: {', '.join(df.columns)}\n\nSample Records:\n{df.head(15).to_string(index=False)}"
-            return summary, text_repr
-            
-        elif file_ext in ["txt", "md", "json", "log", "sql"]:
-            uploaded_file.seek(0)
-            text = uploaded_file.read().decode("utf-8", errors="replace")
-            summary = f"Text File: {file_name} ({len(text)} chars, {file_size_kb:.1f} KB)"
-            return summary, text
-            
-        elif file_ext in ["png", "jpg", "jpeg", "webp"]:
-            summary = f"Image File: {file_name} ({file_size_kb:.1f} KB)"
-            return summary, f"[Attached Image: {file_name} - Visual Claim Evidence / Receipt]"
-            
-        else:
-            uploaded_file.seek(0)
-            text = uploaded_file.read().decode("utf-8", errors="replace")
-            return f"File: {file_name}", text
-            
-    except Exception as e:
-        print(f"[File Parse Error]: {e}")
-        return f"File: {file_name}", ""
+# ---------------------------------------------------------
+# Explore view fetchers
+# ---------------------------------------------------------
+# st.tabs is not lazy: every tab's body runs on every rerun. These are cached so that
+# interacting with one tab does not re-query Snowflake for all the others. Writes
+# (rating, match generation, recommendation regeneration) are deliberately uncached and
+# clear the relevant cache afterwards.
 
 
-def call_cortex_agent(base_url: str, db: str, schema: str, agent: str, prompt: str, model: str, attached_file: Optional[str] = None):
-    endpoint_url = f"{base_url}/api/v2/databases/{db}/schemas/{schema}/agents/{agent}:run"
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-        "prompt": prompt
-    }
-    
-    # 1. Direct in-process execution reusing persistent session (avoids network latency & repeated Duo MFA)
-    try:
-        result = backend_service.execute_cortex_agent_workflow(
-            db=db,
-            schema=schema,
-            agent=agent,
-            prompt=prompt,
-            model=model,
-            attached_file=attached_file,
-            mgr=cached_sf_mgr
-        )
-        return result, endpoint_url, payload
-    except Exception as inproc_err:
-        print(f"[Streamlit Call] In-process execution note: {inproc_err}. Falling back to REST API...")
-    
-    # 2. HTTP Fallback to Background FastAPI Server
-    try:
-        res = requests.post(endpoint_url, json=payload, timeout=65)
-        if res.status_code == 200:
-            return res.json(), endpoint_url, payload
-        else:
-            return {
-                "status": "error",
-                "response": f"Server error ({res.status_code}): {res.text}"
-            }, endpoint_url, payload
-    except Exception as e:
-        return {"status": "error", "response": f"Connection Error: {str(e)}"}, endpoint_url, payload
+@st.cache_data(ttl=60)
+def fetch_strategic_recommendations():
+    return backend_service.get_strategic_recommendations(mgr=cached_sf_mgr)
+
+
+@st.cache_data(ttl=60)
+def fetch_market_pricing():
+    return backend_service.get_market_pricing(mgr=cached_sf_mgr)
+
+
+@st.cache_data(ttl=30)
+def fetch_plan_ratings_summary():
+    return backend_service.get_plan_ratings_summary(mgr=cached_sf_mgr)
+
+
+@st.cache_data(ttl=30)
+def fetch_customer_directory(search: Optional[str] = None, state: Optional[str] = None, limit: int = 200):
+    return backend_service.get_customer_directory(
+        mgr=cached_sf_mgr, search=search, state=state, limit=limit
+    )
+
+
+@st.cache_data(ttl=30)
+def fetch_customer_matches(customer_id: str):
+    return backend_service.get_customer_matches(customer_id=customer_id, mgr=cached_sf_mgr)
+
+
+@st.cache_data(ttl=30)
+def fetch_customer_360(customer_id: str):
+    return backend_service.get_customer_360(customer_id=customer_id, mgr=cached_sf_mgr)
+
+
+@st.cache_data(ttl=60)
+def fetch_agent_telemetry(days: int = 30, user_name: str = None):
+    return backend_service.get_agent_telemetry(
+        mgr=cached_sf_mgr, user_name=user_name, days=days
+    )
+
+
+def clear_rating_caches():
+    """Drop the caches a rating or match write invalidates."""
+    fetch_plan_ratings_summary.clear()
+    fetch_customer_directory.clear()
+    fetch_customer_matches.clear()
+    fetch_customer_360.clear()
+
+
+
+
 
 
 def get_time_greeting():
@@ -1183,15 +1059,31 @@ if "uploaded_doc_summary" not in st.session_state:
     st.session_state.uploaded_doc_summary = None
 if "uploaded_doc_text" not in st.session_state:
     st.session_state.uploaded_doc_text = None
+# Bumped whenever the attachment is cleared, so the file_uploader gets a fresh
+# key and forgets its file. Without this the widget keeps returning the removed
+# file on the next rerun and silently re-attaches it.
+if "doc_uploader_seq" not in st.session_state:
+    st.session_state.doc_uploader_seq = 0
 
 if "selected_state" not in st.session_state:
     st.session_state.selected_state = "National"
 
-if "messages" not in st.session_state:
+if "messages" not in st.session_state or not st.session_state.messages:
     st.session_state.messages = [
         {
             "role": "assistant",
-            "content": "Hello! I am **INSIGHT AI**, your intelligent insurance analyst connected directly to Snowflake. You can ask analytical questions or upload policy documents, claim forms, and CSV datasets for instant AI synthesis.",
+            "content": (
+                "Hello! I am **INSIGHT AI**, your intelligent enterprise insurance analyst. "
+                "You can ask analytical questions, explore claim patterns, or upload policy documents, "
+                "claim forms, and datasets for instant AI synthesis.\n\n"
+                "**💡 Suggested Inquiries:**\n"
+                "- 📊 **State Premiums & Loss Ratios:** *\"What is the total written premium and average claim amount by state?\"*\n"
+                "- 🚨 **High-Risk Policy Types:** *\"Which policy types have the highest loss ratios and claim payouts?\"*\n"
+                "- 🔍 **Fraud Risk Analysis:** *\"Identify top claims flagged with high fraud risk scores.\"*\n"
+                "- 📉 **Customer Churn Exposure:** *\"What is the churn probability and total revenue at risk across customers?\"*\n"
+                "- 📄 **Document Intelligence:** *\"Attach a policy document, loan agreement, or claim PDF to extract clauses, deductibles, or terms.\"*\n"
+                "- 📈 **Trend Forecast:** *\"Show monthly policy trends, retention rates, and acquisition growth over the last 12 months.\"*"
+            ),
             "sql": None,
             "data": None,
             "thinking": None,
@@ -1201,22 +1093,22 @@ if "messages" not in st.session_state:
     ]
 
 # Fetch Snowflake session context
-sf_context = fetch_snowflake_status(API_BASE_URL)
+sf_context = fetch_snowflake_status(_mgr=cached_sf_mgr, _env_config=env_config)
 current_user = sf_context.get("user") or env_config.get("SNOWFLAKE_USERNAME", "UNIFIEDAI")
 current_role = sf_context.get("role") or "ACCOUNTADMIN"
 current_wh = sf_context.get("warehouse") or "COMPUTE_WH"
 current_db = sf_context.get("database") or "UNIFIEDAI_DB"
 current_sh = sf_context.get("schema") or "UNIFIEDAI_SH"
-current_agent = sf_context.get("default_agent") or "INS_ANALYTICS_AGENT"
+current_agent = env_config.get("INS_AGENT") or sf_context.get("default_agent") or "UNIFIED_ENTERPRISE_AGENT"
 
 # Active state cross-filter
 active_state = st.session_state.selected_state if st.session_state.selected_state != "National" else None
 
-overview_data = fetch_overview_metrics(API_BASE_URL, state=active_state)
-dts_data = fetch_dts_analytics(API_BASE_URL)
-risk_churn_data = fetch_risk_churn_analytics(API_BASE_URL, state=active_state)
-geo_data = fetch_geospatial_analytics(API_BASE_URL)
-trend_data = fetch_trend_analytics(API_BASE_URL, state=active_state)
+overview_data = fetch_overview_metrics(state=active_state)
+dts_data = fetch_dts_analytics()
+risk_churn_data = fetch_risk_churn_analytics(state=active_state)
+geo_data = fetch_geospatial_analytics()
+trend_data = fetch_trend_analytics(state=active_state)
 
 
 # ---------------------------------------------------------
@@ -1303,6 +1195,8 @@ with st.sidebar:
         st.session_state.uploaded_doc_name = None
         st.session_state.uploaded_doc_summary = None
         st.session_state.uploaded_doc_text = None
+        st.session_state.uploaded_doc_snowflake = None
+        st.session_state.doc_uploader_seq += 1
         st.rerun()
 
     st.markdown(f"""
@@ -1319,270 +1213,10 @@ with st.sidebar:
 # ---------------------------------------------------------
 # Helper: Render Assistant Chat Response
 # ---------------------------------------------------------
-def extract_table_from_text(text: str) -> Optional[pd.DataFrame]:
-    """Extracts markdown table from agent response text into a pandas DataFrame."""
-    if not text:
-        return None
-    try:
-        lines = [l.strip() for l in text.split('\n') if '|' in l]
-        table_lines = [l for l in lines if l.startswith('|') and l.endswith('|')]
-        if len(table_lines) >= 3 and any('-|-' in l or '---|' in l for l in table_lines):
-            from io import StringIO
-            df = pd.read_csv(StringIO('\n'.join(table_lines)), sep='|', engine='python').dropna(how='all', axis=1)
-            df.columns = [c.strip() for c in df.columns]
-            df = df[~df.iloc[:, 0].astype(str).str.contains('---', na=False)]
-            for col in df.columns:
-                df[col] = df[col].astype(str).str.strip()
-                try:
-                    clean_col = df[col].str.replace('$', '', regex=False).str.replace(',', '', regex=False).str.replace('%', '', regex=False)
-                    df[col] = pd.to_numeric(clean_col)
-                except Exception:
-                    pass
-            if len(df) > 0:
-                return df
-    except Exception:
-        pass
-    return None
 
 
-def render_interactive_chart(df: pd.DataFrame, key_prefix: str = ""):
-    """Renders smart interactive graphs (multi-series forecast, bar, line, area) for any tabular dataset."""
-    if df is None or df.empty:
-        return
-
-    cols = list(df.columns)
-    type_col = next((c for c in cols if any(k in c.lower() for k in ['policy_type', 'policy type', 'line', 'category', 'plan'])), None)
-    time_col = next((c for c in cols if any(k in c.lower() for k in ['month', 'date', 'period', 'horizon', 'quarter'])), None)
-    val_col = next((c for c in cols if any(k in c.lower() for k in ['forecast_new_policies', 'forecast', 'new_policies', 'policies', 'projected', 'count', 'value', 'amount', 'premium'])), None)
-
-    st.markdown("#### 📈 Visualization & Trends")
-
-    # 1. Specialized Multi-Series Time-Series / Forecast Chart (Pivoted by Category)
-    if type_col and time_col and val_col and pd.api.types.is_numeric_dtype(df[val_col]):
-        try:
-            pivoted = df.pivot(index=time_col, columns=type_col, values=val_col)
-            chart_type = st.radio(
-                "Select Graph Format:",
-                ["Multi-Series Line Chart", "Grouped Bar Chart", "Area Chart"],
-                horizontal=True,
-                key=f"pivot_chart_type_{key_prefix}"
-            )
-            if chart_type == "Multi-Series Line Chart":
-                st.line_chart(pivoted, use_container_width=True)
-            elif chart_type == "Grouped Bar Chart":
-                st.bar_chart(pivoted, use_container_width=True)
-            else:
-                st.area_chart(pivoted, use_container_width=True)
-            return
-        except Exception:
-            pass
-
-    # 2. General Dataframe Chart
-    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-    text_cols = df.select_dtypes(include=['object', 'string', 'category']).columns.tolist()
-
-    if len(numeric_cols) > 0:
-        chart_formats = ["Bar Chart", "Line Chart", "Area Chart"]
-        chart_type = st.radio(
-            "Select Graph Format:",
-            chart_formats,
-            horizontal=True,
-            key=f"gen_chart_type_{key_prefix}"
-        )
-        try:
-            if text_cols:
-                chart_df = df.set_index(text_cols[0])[numeric_cols[:4]]
-            else:
-                chart_df = df[numeric_cols[:4]]
-
-            if chart_type == "Bar Chart":
-                st.bar_chart(chart_df, use_container_width=True)
-            elif chart_type == "Line Chart":
-                st.line_chart(chart_df, use_container_width=True)
-            elif chart_type == "Area Chart":
-                st.area_chart(chart_df, use_container_width=True)
-        except Exception as e:
-            st.warning(f"Chart render note: {e}")
 
 
-def render_assistant_response(msg_dict, msg_key_prefix=""):
-    response_text = msg_dict.get("content", "")
-    # Strip "Recommended next steps:" from forecast responses
-    response_text = backend_service.remove_recommended_next_steps(response_text)
-    
-    sql_query = msg_dict.get("sql")
-    query_data = msg_dict.get("data")
-    thinking = msg_dict.get("thinking")
-    attached_doc = msg_dict.get("attached_doc")
-
-    # Extract or infer tabular DataFrame
-    df = None
-    if query_data and len(query_data) > 0:
-        try:
-            df = pd.DataFrame(query_data)
-        except Exception:
-            pass
-    if df is None or df.empty:
-        df = extract_table_from_text(response_text)
-
-    has_data = df is not None and not df.empty
-    has_sql = bool(sql_query and str(sql_query).strip())
-
-    if attached_doc:
-        st.markdown(f'<div class="attached-file-badge">📎 Context: {attached_doc}</div>', unsafe_allow_html=True)
-
-    if thinking and thinking.strip():
-        with st.expander("💭 Thought for a few seconds", expanded=False):
-            st.markdown(thinking)
-
-    # Clean direct response for non-tabular text
-    if not has_sql and not has_data:
-        st.markdown(response_text)
-        return
-
-    tab_titles = ["💬 Answer"]
-    if has_data:
-        tab_titles.append("📊 Visualizations & Analytics")
-    if has_sql:
-        tab_titles.append("🔍 Generated SQL")
-
-    tabs = st.tabs(tab_titles)
-    tab_idx = 0
-
-    with tabs[tab_idx]:
-        st.markdown(response_text)
-        if has_data:
-            st.markdown("<br>", unsafe_allow_html=True)
-            render_interactive_chart(df, key_prefix=f"sum_{msg_key_prefix}")
-            st.markdown("<br>##### 📋 Result Dataset", unsafe_allow_html=True)
-            st.dataframe(df, use_container_width=True)
-            
-            csv_data = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Export Dataset as CSV",
-                data=csv_data,
-                file_name="snowflake_insurance_results.csv",
-                mime="text/csv",
-                key=f"dl_ans_{msg_key_prefix}_{id(msg_dict)}"
-            )
-    tab_idx += 1
-
-    if has_data:
-        with tabs[tab_idx]:
-            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-            if len(numeric_cols) > 0:
-                st.markdown("### 📊 Metrics Overview")
-                m_cols = st.columns(min(len(numeric_cols), 4))
-                for i, num_col in enumerate(numeric_cols[:4]):
-                    with m_cols[i % min(len(numeric_cols), 4)]:
-                        val = df[num_col].iloc[0] if len(df) == 1 else (df[num_col].sum() if any(k in num_col for k in ["TOTAL", "SUM", "COUNT"]) else df[num_col].mean())
-                        val_str = f"${val:,.2f}" if isinstance(val, float) and val % 1 != 0 else f"{val:,}" if isinstance(val, (int, float)) else str(val)
-                        label = ("Total " if len(df) > 1 and any(k in num_col for k in ["TOTAL", "SUM", "COUNT"]) else "") + num_col.replace('_', ' ').title()
-                        st.metric(label=label, value=val_str)
-
-            render_interactive_chart(df, key_prefix=f"vis_{msg_key_prefix}")
-
-            st.markdown("### 📋 Full Result Dataset")
-            st.dataframe(df, use_container_width=True)
-            
-            csv_data = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download Data as CSV",
-                data=csv_data,
-                file_name="snowflake_cortex_results.csv",
-                mime="text/csv",
-                key=f"dl_tab_{msg_key_prefix}_{id(msg_dict)}"
-            )
-        tab_idx += 1
-
-    if has_sql:
-        with tabs[tab_idx]:
-            st.markdown("### 🔍 Snowflake SQL Query")
-            st.code(sql_query, language="sql")
-            
-            # Action controls to execute query live from UI
-            col_run, col_edit, col_meta = st.columns([3, 2.5, 4.5])
-            h_suffix = abs(hash(sql_query)) % 100000
-            run_key = f"btn_run_sql_{msg_key_prefix}_{h_suffix}"
-            edit_toggle_key = f"toggle_edit_sql_{msg_key_prefix}_{h_suffix}"
-            state_res_key = f"sql_run_result_{msg_key_prefix}_{h_suffix}"
-            
-            with col_run:
-                run_clicked = st.button("▶ Run Query in Snowflake", key=run_key, type="primary", use_container_width=True)
-            with col_edit:
-                show_editor = st.checkbox("✏️ Edit Query", key=edit_toggle_key)
-            with col_meta:
-                target_db_name = env_config.get("SNOWFLAKE_DB", "UNIFIEDAI_DB")
-                st.caption(f"⚡ Target: `{target_db_name}` • Warehouse: `COMPUTE_WH`")
-
-            custom_sql = sql_query
-            if show_editor:
-                custom_sql = st.text_area(
-                    "Modify SQL query before executing:",
-                    value=sql_query,
-                    height=130,
-                    key=f"txt_sql_editor_{msg_key_prefix}_{h_suffix}"
-                )
-                if st.button("▶ Execute Modified Query", key=f"btn_run_custom_{msg_key_prefix}_{h_suffix}", type="secondary"):
-                    run_clicked = True
-
-            if run_clicked:
-                try:
-                    import time
-                    with st.spinner("❄️ Executing SQL query in Snowflake..."):
-                        t0 = time.time()
-                        clean_run_sql = backend_service.sanitize_semantic_view_sql(custom_sql, db=target_db_name) if hasattr(backend_service, "sanitize_semantic_view_sql") else custom_sql
-                        exec_mgr = cached_sf_mgr if 'cached_sf_mgr' in locals() and cached_sf_mgr else backend_service.snowflake_manager
-                        exec_data, exec_cols = exec_mgr.execute_query(clean_run_sql)
-                        dur = time.time() - t0
-                        st.session_state[state_res_key] = {
-                            "data": exec_data,
-                            "columns": exec_cols,
-                            "duration": dur,
-                            "sql": clean_run_sql,
-                            "error": None
-                        }
-                except Exception as sql_exec_err:
-                    st.session_state[state_res_key] = {
-                        "data": None,
-                        "columns": None,
-                        "duration": 0,
-                        "sql": custom_sql,
-                        "error": str(sql_exec_err)
-                    }
-
-            # Render query results when available
-            if state_res_key in st.session_state:
-                res_state = st.session_state[state_res_key]
-                if res_state.get("error"):
-                    st.error(f"❌ Snowflake Query Error: {res_state['error']}")
-                elif res_state.get("data") is not None:
-                    e_data = res_state["data"]
-                    e_cols = res_state["columns"]
-                    e_dur = res_state["duration"]
-                    e_df = pd.DataFrame(e_data) if e_data else pd.DataFrame(columns=e_cols)
-                    
-                    st.success(f"✅ Executed successfully in **{e_dur:.2f}s** • Returned **{len(e_df):,}** rows")
-                    
-                    # Live Data Table
-                    st.markdown("##### 📋 Query Results")
-                    st.dataframe(e_df, use_container_width=True)
-                    
-                    # Interactive Chart
-                    if not e_df.empty:
-                        render_interactive_chart(e_df, key_prefix=f"live_chart_{msg_key_prefix}_{h_suffix}")
-                        
-                        csv_dl = e_df.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="📥 Export Query Result as CSV",
-                            data=csv_dl,
-                            file_name="snowflake_query_result.csv",
-                            mime="text/csv",
-                            key=f"dl_live_{msg_key_prefix}_{h_suffix}"
-                        )
-                else:
-                    st.info("Query executed successfully. (0 rows returned)")
-        tab_idx += 1
 
 
 # ---------------------------------------------------------
@@ -1598,7 +1232,6 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
     st.markdown("""
         <div class="section-header-banner" style="margin-top: 24px;">
             <div class="section-title">🗺️ US Risk & Premium Map</div>
-            <div class="section-badge">Live Geospatial Cross-Filter</div>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1639,19 +1272,42 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
             </div>
         """, unsafe_allow_html=True)
 
-    # KPI Overview Metrics
-    active_policies_val = overview_data.get("active_policies", 300)
-    active_policies_trend = overview_data.get("active_policies_trend", "+8.4% MoM")
-    
-    proc_days_val = overview_data.get("processing_days", overview_data.get("avg_settlement_days", 14.8))
-    proc_days_trend = overview_data.get("processing_days_trend", "-2.3d YoY")
-    
-    csat_score_val = overview_data.get("csat_score", "4.8 / 5.0")
-    csat_pct_val = overview_data.get("csat_pct", "94.2%")
-    csat_trend = overview_data.get("csat_trend", "+5.1% QoQ")
-    
-    prem_rev = overview_data.get("revenue", 2210154.0)
-    prem_rev_trend = overview_data.get("revenue_growth_pct", "+12.6% YoY")
+    # KPI Overview Metrics. No .get() fallbacks here: the backend now returns real values
+    # or None, and a default like "+8.4% MoM" or "4.8 / 5.0" would silently reinstate a
+    # fabricated figure whenever the query returned nothing.
+    active_policies_val = overview_data.get("active_policies") or 0
+    active_policies_trend = overview_data.get("active_policies_trend")
+
+    proc_days_val = overview_data.get("processing_days") or overview_data.get("avg_settlement_days") or 0.0
+    proc_days_trend = overview_data.get("processing_days_trend")
+
+    csat_score_val = overview_data.get("csat_score")
+    csat_pct_val = overview_data.get("csat_pct")
+    csat_trend = overview_data.get("csat_trend")
+
+    prem_rev = overview_data.get("revenue") or 0.0
+    prem_rev_trend = overview_data.get("revenue_growth_pct")
+
+    def kpi_pill(text, invert=False):
+        """Render a trend pill, or nothing at all when there is no trend to show.
+
+        Colour follows the sign of the delta instead of being fixed per-card, so a
+        decline no longer renders green. invert=True is for metrics where down is good
+        (processing days).
+        """
+        if not text:
+            return ""
+        label = str(text)
+        stripped = label.lstrip("• ").split("•")[-1].strip()
+        if stripped.startswith("-"):
+            good = invert
+        elif stripped.startswith("+"):
+            good = not invert
+        else:
+            good = None
+        cls = "kpi-pill-green" if good else ("kpi-pill-rose" if good is False else "kpi-pill-blue")
+        return f'<span class="{cls}">{html.escape(label)}</span>'
+
 
     # 3D Pydeck Map & Executive KPI Split
     c_map, c_map_stats = st.columns([1.65, 1.35])
@@ -1822,12 +1478,14 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
         st.markdown("#### 📊 Executive Portfolio KPIs & Risk")
         
         # 4 KPI Cards in a 2x2 Responsive Grid
+        csat_display = csat_score_val or "Not available"
+        csat_desc = f"{csat_pct_val} positive sentiment" if csat_pct_val else "No CSAT data in ANALYTICS.CLAIMS_KPI"
         st.markdown(f"""
             <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 8px;">
                 <div class="kpi-card" style="padding: 12px 14px;">
                     <div class="kpi-header">
                         <span class="kpi-title" style="font-size: 0.76rem;">Active Policies</span>
-                        <span class="kpi-pill-green">{active_policies_trend}</span>
+                        {kpi_pill(active_policies_trend)}
                     </div>
                     <div class="kpi-value" style="font-size: 1.45rem; margin-bottom: 2px;">{active_policies_val:,}</div>
                     <div class="kpi-desc" style="font-size: 0.74rem;">Active policyholders across 4 tiers</div>
@@ -1835,7 +1493,7 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
                 <div class="kpi-card" style="padding: 12px 14px;">
                     <div class="kpi-header">
                         <span class="kpi-title" style="font-size: 0.76rem;">Processing Days</span>
-                        <span class="kpi-pill-purple">{proc_days_trend}</span>
+                        {kpi_pill(proc_days_trend, invert=True)}
                     </div>
                     <div class="kpi-value" style="font-size: 1.45rem; margin-bottom: 2px;">{proc_days_val} Days</div>
                     <div class="kpi-desc" style="font-size: 0.74rem;">Average claims turnaround</div>
@@ -1843,15 +1501,15 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
                 <div class="kpi-card" style="padding: 12px 14px;">
                     <div class="kpi-header">
                         <span class="kpi-title" style="font-size: 0.76rem;">Customer CSAT</span>
-                        <span class="kpi-pill-green">{csat_trend}</span>
+                        {kpi_pill(csat_trend)}
                     </div>
-                    <div class="kpi-value" style="font-size: 1.45rem; margin-bottom: 2px;">{csat_score_val}</div>
-                    <div class="kpi-desc" style="font-size: 0.74rem;">{csat_pct_val} positive sentiment</div>
+                    <div class="kpi-value" style="font-size: 1.45rem; margin-bottom: 2px;">{csat_display}</div>
+                    <div class="kpi-desc" style="font-size: 0.74rem;">{csat_desc}</div>
                 </div>
                 <div class="kpi-card" style="padding: 12px 14px;">
                     <div class="kpi-header">
                         <span class="kpi-title" style="font-size: 0.76rem;">Total Revenue</span>
-                        <span class="kpi-pill-blue">{prem_rev_trend}</span>
+                        {kpi_pill(prem_rev_trend)}
                     </div>
                     <div class="kpi-value" style="font-size: 1.45rem; margin-bottom: 2px;">${prem_rev/1_000_000:.2f}M</div>
                     <div class="kpi-desc" style="font-size: 0.74rem;">Gross written annual premium</div>
@@ -1860,24 +1518,56 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
         """, unsafe_allow_html=True)
 
         if geo_data:
-            # Top territory summary badges
-            st.markdown("""
+            # Top territory summary badges (derived live from Snowflake geo_data)
+            def _fmt_premium(val):
+                val = float(val or 0.0)
+                if val >= 1_000_000:
+                    return f"${val / 1_000_000:.2f}M"
+                if val >= 1_000:
+                    return f"${val / 1_000:.0f}k"
+                return f"${val:,.0f}"
+
+            top_prem = max(geo_data, key=lambda g: float(g.get("total_premium") or 0.0))
+            top_risk = max(geo_data, key=lambda g: float(g.get("avg_loss_ratio") or 0.0))
+
+            top_prem_lr = float(top_prem.get("avg_loss_ratio") or 0.0)
+            top_prem_label = top_prem.get("risk_label", "Optimal")
+            top_prem_lr_color = "#34D399" if "Optimal" in top_prem_label else ("#FBBF24" if "Elevated" in top_prem_label else "#FB7185")
+
+            st.markdown(f"""
                 <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 0px;">
                     <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 8px; padding: 9px 12px;">
                         <div style="color: #94A3B8; font-size: 0.68rem; text-transform: uppercase;">Top Written Premium</div>
-                        <div style="color: #38BDF8; font-weight: 800; font-size: 0.92rem;">TX • $1.19M</div>
-                        <div style="color: #34D399; font-size: 0.70rem;">51.4% Loss Ratio (Optimal)</div>
+                        <div style="color: #38BDF8; font-weight: 800; font-size: 0.92rem;">{top_prem.get("state", "—")} • {_fmt_premium(top_prem.get("total_premium"))}</div>
+                        <div style="color: {top_prem_lr_color}; font-size: 0.70rem;">{top_prem_lr:.1f}% Loss Ratio ({top_prem_label})</div>
                     </div>
                     <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 8px; padding: 9px 12px;">
                         <div style="color: #94A3B8; font-size: 0.68rem; text-transform: uppercase;">Highest Risk Territory</div>
-                        <div style="color: #FB7185; font-weight: 800; font-size: 0.92rem;">IL • 69.2%</div>
-                        <div style="color: #94A3B8; font-size: 0.70rem;">$571k Written Premium</div>
+                        <div style="color: #FB7185; font-weight: 800; font-size: 0.92rem;">{top_risk.get("state", "—")} • {float(top_risk.get("avg_loss_ratio") or 0.0):.1f}%</div>
+                        <div style="color: #94A3B8; font-size: 0.70rem;">{_fmt_premium(top_risk.get("total_premium"))} Written Premium</div>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
 
     # Sleek Glassmorphic Map Legend Bar - Extended Full Width to the Right (No Gaps!)
-    st.markdown("""
+    # The right-hand slot reports measured CORE data completeness. It replaces a
+    # "Data Trust Score: 88 / Enterprise Verified (Tier 1)" badge that was a literal in
+    # the backend - all three DQ_* tables are empty, so nothing was ever computed.
+    dq_completeness = dts_data.get("completeness_pct")
+    dq_validity = dts_data.get("validity_pct")
+    if dq_completeness is None:
+        dq_chip = '<span style="color: #94A3B8;">Data completeness unavailable</span>'
+    else:
+        dq_color = "#34D399" if dq_completeness >= 99 else ("#FBBF24" if dq_completeness >= 95 else "#FB7185")
+        detail = dts_data.get("completeness_detail", {})
+        dq_chip = (
+            f'<span>📋 <b style="color: {dq_color};">{dq_completeness:.1f}% Field Completeness</b>'
+            f'<span style="color: #64748B;"> ({detail.get("fields_checked", 0)} checks'
+            + (f", {dq_validity:.1f}% valid" if dq_validity is not None else "")
+            + ')</span></span>'
+        )
+
+    st.markdown(f"""
         <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 8px; padding: 8px 18px; margin-top: 6px; margin-bottom: 4px; font-size: 0.78rem; color: #94A3B8; width: 100%;">
             <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center;">
                 <span>🟢 <b style="color: #34D399;">Optimal Loss Ratio (&lt; 52%)</b></span>
@@ -1885,20 +1575,47 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
                 <span>🔴 <b style="color: #FB7185;">Critical Risk (&gt; 62%)</b></span>
                 <span>🗼 <b style="color: #E2E8F0;">Pillar Height: Written Premium</b></span>
             </div>
-           
+            <div style="display: flex; gap: 14px; align-items: center;">{dq_chip}</div>
         </div>
     """, unsafe_allow_html=True)
+
+    with st.expander("📋 Data Quality Detail — measured on CORE.POLICIES, CLAIMS & CUSTOMERS"):
+        detail = dts_data.get("completeness_detail", {})
+        if detail.get("status") != "success":
+            st.warning(f"Could not measure data quality: {detail.get('message', 'unknown error')}")
+        else:
+            dq_c1, dq_c2, dq_c3 = st.columns(3)
+            dq_c1.metric("Field Completeness", f"{detail.get('completeness_pct')}%",
+                         help=f"{detail.get('populated_values'):,} of {detail.get('expected_values'):,} required values populated")
+            dq_c2.metric("Row Validity", f"{detail.get('validity_pct')}%",
+                         help=f"{detail.get('violation_count'):,} range/ordering violations across {detail.get('rows_examined'):,} rows")
+            dq_c3.metric("Checks Run", f"{detail.get('fields_checked')} fields · {len(detail.get('violations', []))} rules")
+
+            st.caption("Completeness by field")
+            st.dataframe(pd.DataFrame(detail.get("field_checks", [])),
+                         width="stretch", hide_index=True)
+            st.caption("Validity rule violations")
+            st.dataframe(pd.DataFrame(detail.get("violations", [])),
+                         width="stretch", hide_index=True)
+
+        if not dts_data.get("dq_rules_available"):
+            st.caption(
+                "UNIFIEDAI_SH.DQ_RULES is empty, so no rule-based quality dimensions are "
+                "available. The figures above are measured directly from the CORE tables."
+            )
+        else:
+            st.caption("Rule-based quality dimensions from UNIFIEDAI_SH.DQ_RULES")
+            st.dataframe(pd.DataFrame(dts_data.get("quality_dimensions", [])),
+                         width="stretch", hide_index=True)
 
 
 
     # ---------------------------------------------------------
     # ROW 2: CHARTS — TREND ANALYSIS (CALCULATED FROM CORE.CLAIMS & RISK.AT_RISK_POLICIES)
     # ---------------------------------------------------------
-    curr_state_label = f"• {st.session_state.selected_state}" if st.session_state.selected_state != "National" else "• National Portfolio"
-    st.markdown(f"""
+    st.markdown("""
         <div class="section-header-banner">
             <div class="section-title">📈 Trend Analysis (Claims, Resolution, Fraud & At-Risk Revenue)</div>
-            <div class="section-badge">Row 2 • Live Snowflake CORE & RISK Schemas {curr_state_label}</div>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1964,7 +1681,6 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
     # ------------------ LEFT: CLAIMS & RESOLUTION TRENDS ------------------
     with c_claim_col:
         st.markdown("### 🚨 Claims Velocity & Resolution Trends")
-        st.caption("Monthly claims volume, settlement turnaround days, and fraud flags from `CORE.CLAIMS`.")
 
         claim_chart_metric = st.radio(
             "Select Claims Metric to Visualize:",
@@ -1997,7 +1713,6 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
     # ------------------ RIGHT: AT-RISK POLICIES & REVENUE TRENDS ------------------
     with c_risk_col:
         st.markdown("### 💰 At-Risk Policies & Revenue Exposure Trends")
-        st.caption("Monthly at-risk policy identification and financial exposure from `RISK.AT_RISK_POLICIES`.")
 
         risk_chart_metric = st.radio(
             "Select Risk Exposure Metric to Visualize:",
@@ -2035,7 +1750,6 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
     st.markdown("""
         <div class="section-header-banner">
             <div class="section-title">🛡 Risk Analysis & Categorical Churn Intelligence</div>
-            <div class="section-badge">Row 3 • Risk Matrix & Retention</div>
         </div>
     """, unsafe_allow_html=True)
 
@@ -2043,96 +1757,89 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
 
     with c_risk:
         st.markdown("### 🚨 Multi-Dimensional Risk Exposure")
-        st.caption("Forensic fraud score indicators, high-priority signals, and category claim exposure.")
-        
-        tab_risk_tbl, tab_risk_vis = st.tabs([
-            "⚠️ High Priority Claim Signals (Fraud Score ≥ 0.75)",
-            "📊 Category Risk Exposure"
-        ])
-        
-        flagged = risk_churn_data.get("flagged_incidents", [])
-        with tab_risk_tbl:
-            if flagged:
-                df_flagged = pd.DataFrame(flagged)
-                
-                # Parse total exposure amount safely
-                def _parse_amt(v):
-                    if isinstance(v, (int, float)):
-                        return float(v)
-                    if isinstance(v, str):
-                        return float(v.replace("$", "").replace(",", "").strip() or 0.0)
-                    return 0.0
-                
-                total_flagged_exp = sum(_parse_amt(x) for x in df_flagged.get("Claim Amount", []))
-                max_fraud_score = float(df_flagged["Fraud Score"].max()) if "Fraud Score" in df_flagged.columns else 1.0
-                
-                # Metric summary cards
-                st.markdown(f"""
-                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px;">
-                        <div class="kpi-card" style="padding: 8px 10px;">
-                            <div class="kpi-title" style="font-size: 0.72rem; color: #94A3B8;">Flagged Signals</div>
-                            <div class="kpi-value" style="font-size: 1.25rem; font-weight: 700; color: #EF4444; margin-top: 2px;">{len(df_flagged)} Claims</div>
-                        </div>
-                        <div class="kpi-card" style="padding: 8px 10px;">
-                            <div class="kpi-title" style="font-size: 0.72rem; color: #94A3B8;">Claim Exposure</div>
-                            <div class="kpi-value" style="font-size: 1.25rem; font-weight: 700; color: #F59E0B; margin-top: 2px;">${total_flagged_exp:,.0f}</div>
-                        </div>
-                        <div class="kpi-card" style="padding: 8px 10px;">
-                            <div class="kpi-title" style="font-size: 0.72rem; color: #94A3B8;">Peak Fraud Score</div>
-                            <div class="kpi-value" style="font-size: 1.25rem; font-weight: 700; color: #38BDF8; margin-top: 2px;">{max_fraud_score:.2f}</div>
-                        </div>
-                    </div>
-                """, unsafe_allow_html=True)
-                
-                st.dataframe(
-                    df_flagged[["Claim ID", "Category", "Claim Amount", "Fraud Score", "Priority", "Reason"]],
-                    column_config={
-                        "Claim ID": st.column_config.TextColumn("Claim ID", width="small"),
-                        "Category": st.column_config.TextColumn("Category", width="small"),
-                        "Claim Amount": st.column_config.TextColumn("Claim Amount", width="small"),
-                        "Fraud Score": st.column_config.ProgressColumn(
-                            "Fraud Score",
-                            help="Forensic risk probability (0.0 to 1.0)",
-                            min_value=0.0,
-                            max_value=1.0,
-                            format="%.2f",
-                            width="small",
-                        ),
-                        "Priority": st.column_config.TextColumn("Priority", width="small"),
-                        "Reason": st.column_config.TextColumn("Signal / Fraud Reason", width="medium"),
+        st.caption("Category claim exposure, severity, and fraud indicators.")
+
+        st.markdown("##### 📊 Category Risk Exposure")
+        risk_cats = risk_churn_data.get("risk_by_category", [])
+        if risk_cats:
+            df_risk = pd.DataFrame(risk_cats)
+
+            # Derived hover-only fields
+            total_exposure = float(df_risk["Risk Exposure ($)"].sum()) or 1.0
+            df_risk["Share of Exposure"] = (df_risk["Risk Exposure ($)"] / total_exposure * 100.0).round(1)
+            df_risk["High Risk Rate"] = (
+                df_risk["High Risk Claims"] / df_risk["Total Claims"].replace(0, pd.NA) * 100.0
+            ).fillna(0.0).round(1)
+
+            pie_spec = {
+                "mark": {
+                    "type": "arc",
+                    "innerRadius": 62,
+                    "outerRadius": 108,
+                    "stroke": "#0A0F1D",
+                    "strokeWidth": 2,
+                    "cursor": "pointer"
+                },
+                "encoding": {
+                    "theta": {
+                        "field": "Risk Exposure ($)",
+                        "type": "quantitative",
+                        "stack": True
                     },
-                    use_container_width=True,
-                    hide_index=True,
-                    height=270
-                )
-                
-                if st.button("🔍 Investigate Flagged Claims in Enterprise AI", key="btn_home_investigate_risk", use_container_width=True):
-                    st.session_state.selected_prompt = "Perform forensic risk analysis on top flagged insurance claims with fraud scores > 0.75."
-                    st.session_state.current_nav = "◉ Enterprise AI"
-                    try:
-                        st.switch_page("pages/1_Enterprise_AI.py")
-                    except Exception:
-                        st.rerun()
-            else:
-                st.info("No high priority claim signals detected for current filter.")
-                
-        with tab_risk_vis:
-            risk_cats = risk_churn_data.get("risk_by_category", [])
-            if risk_cats:
-                df_risk = pd.DataFrame(risk_cats)
-                st.bar_chart(df_risk.set_index("Category")[["Risk Exposure ($)"]], use_container_width=True, height=220)
-                st.dataframe(
-                    df_risk[["Category", "Total Claims", "High Risk Claims", "Risk Exposure ($)", "Avg Fraud Score", "Risk Severity"]],
-                    column_config={
-                        "Risk Exposure ($)": st.column_config.NumberColumn("Risk Exposure ($)", format="$%.2f"),
-                        "Avg Fraud Score": st.column_config.NumberColumn("Avg Fraud Score", format="%.2f"),
+                    "order": {
+                        "field": "Risk Exposure ($)",
+                        "type": "quantitative",
+                        "sort": "descending"
                     },
-                    use_container_width=True,
-                    hide_index=True,
-                    height=180
-                )
-            else:
-                st.info("Category risk exposure data loading...")
+                    "color": {
+                        "field": "Category",
+                        "type": "nominal",
+                        "scale": {
+                            "range": ["#38BDF8", "#F59E0B", "#EF4444", "#10B981",
+                                      "#A78BFA", "#FB7185", "#22D3EE", "#FBBF24"]
+                        },
+                        "legend": {
+                            "title": None,
+                            "orient": "right",
+                            "labelColor": "#94A3B8",
+                            "labelFontSize": 11,
+                            "symbolType": "circle",
+                            "symbolSize": 90
+                        }
+                    },
+                    "opacity": {
+                        "condition": {"param": "hover_cat", "value": 1.0},
+                        "value": 0.55
+                    },
+                    "tooltip": [
+                        {"field": "Category", "type": "nominal", "title": "Category"},
+                        {"field": "Risk Severity", "type": "nominal", "title": "Risk Severity"},
+                        {"field": "Risk Exposure ($)", "type": "quantitative",
+                         "title": "Risk Exposure", "format": "$,.2f"},
+                        {"field": "Share of Exposure", "type": "quantitative",
+                         "title": "Share of Exposure (%)", "format": ".1f"},
+                        {"field": "Total Claims", "type": "quantitative", "title": "Total Claims"},
+                        {"field": "High Risk Claims", "type": "quantitative", "title": "High Risk Claims"},
+                        {"field": "High Risk Rate", "type": "quantitative",
+                         "title": "High Risk Rate (%)", "format": ".1f"},
+                        {"field": "Avg Fraud Score", "type": "quantitative",
+                         "title": "Avg Fraud Score", "format": ".2f"},
+                        {"field": "Avg Days", "type": "quantitative",
+                         "title": "Avg Days to Resolve", "format": ".1f"}
+                    ]
+                },
+                "params": [{
+                    "name": "hover_cat",
+                    "select": {"type": "point", "fields": ["Category"], "on": "pointerover"}
+                }],
+                "view": {"stroke": None},
+                "background": "transparent"
+            }
+
+            st.vega_lite_chart(df_risk, pie_spec, use_container_width=True, height=300)
+            st.caption("Hover any segment for full category detail — exposure, share, claim volume, high-risk rate, fraud score, and resolution time.")
+        else:
+            st.info("Category risk exposure data loading...")
 
     with c_churn:
         st.markdown("### 📉 Policyholder Churn by Category")
@@ -2145,9 +1852,17 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
         
         churn_tiers = risk_churn_data.get("churn_by_plan_tier", [])
         with tab_churn_tbl:
-            if churn_tiers:
-                df_tier = pd.DataFrame(churn_tiers)
-                
+            df_tier = pd.DataFrame(churn_tiers) if churn_tiers else pd.DataFrame()
+
+            # Drop rows with no plan tier or no underlying policies so the grid
+            # only renders populated tiers (no blank filler rows)
+            if not df_tier.empty and "Plan Tier" in df_tier.columns:
+                df_tier = df_tier[df_tier["Plan Tier"].notna() & (df_tier["Plan Tier"].astype(str).str.strip() != "")]
+                if "Policies" in df_tier.columns:
+                    df_tier = df_tier[df_tier["Policies"].fillna(0) > 0]
+                df_tier = df_tier.reset_index(drop=True)
+
+            if not df_tier.empty:
                 total_tier_policies = int(df_tier["Policies"].sum()) if "Policies" in df_tier.columns else 0
                 total_tier_exp = float(df_tier["Revenue Exposure ($)"].sum()) if "Revenue Exposure ($)" in df_tier.columns else 0.0
                 avg_tier_churn = float(df_tier["Churn Rate %"].mean()) if "Churn Rate %" in df_tier.columns else 0.0
@@ -2187,15 +1902,10 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
                         "Revenue Exposure ($)": st.column_config.NumberColumn("Revenue Exposure ($)", format="$%.2f", width="medium"),
                     },
                     use_container_width=True,
-                    hide_index=True,
-                    height=270
+                    hide_index=True
                 )
-                
-                churn_insights = risk_churn_data.get("churn_insights", [])
-                if churn_insights:
-                    st.caption("💡 " + churn_insights[0])
             else:
-                st.info("Plan tier churn data loading...")
+                st.info("No plan tier churn data available for the current filter.")
 
         with tab_churn_vis:
             churn_cats = risk_churn_data.get("churn_by_category", [])
@@ -2253,6 +1963,7 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
                 st.session_state.uploaded_doc_summary = None
                 st.session_state.uploaded_doc_text = None
                 st.session_state.uploaded_doc_snowflake = None
+                st.session_state.doc_uploader_seq += 1
                 st.rerun()
 
     # Left Attachment Popover (like ChatGPT)
@@ -2264,7 +1975,7 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
             agent_up = st.file_uploader(
                 "Upload document",
                 type=["pdf", "csv", "xlsx", "xls", "txt", "json", "png", "jpg", "jpeg"],
-                key="ask_ai_left_popover_uploader",
+                key=f"ask_ai_left_popover_uploader_{st.session_state.doc_uploader_seq}",
                 label_visibility="collapsed"
             )
             if agent_up is not None:
@@ -2272,11 +1983,7 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
                     summary, content = extract_uploaded_file_content(agent_up)
                     agent_up.seek(0)
                     raw_bytes = agent_up.read()
-                    
-                    if not hasattr(backend_service, "upload_and_ingest_pipeline"):
-                        import importlib
-                        importlib.reload(backend_service)
-                    
+
                     try:
                         with st.spinner("❄️ Uploading to Snowflake Stage (@DOC_STAGE) & generating Cortex Embeddings..."):
                             ingest_res = backend_service.upload_and_ingest_pipeline(
@@ -2299,65 +2006,42 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
     for idx, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
-                render_assistant_response(message, msg_key_prefix=f"chat_{idx}")
+                render_assistant_response(message, msg_key_prefix=f"chat_{idx}", mgr=cached_sf_mgr, env_config=env_config)
             else:
                 st.markdown(message["content"])
 
+    # Interactive Quick Suggestions (visible when chat starts)
+    if len(st.session_state.messages) <= 1:
+        st.markdown('<div style="font-size:0.84rem; font-weight:600; color:#94A3B8; margin-top:14px; margin-bottom:8px;">💡 Suggested Inquiries to Explore:</div>', unsafe_allow_html=True)
+        sug_cols1 = st.columns(3)
+        sug_cols2 = st.columns(3)
+        suggestions = [
+            ("📊 State Premiums & Claims", "What is the total written premium and average claim amount by state?"),
+            ("🚨 High-Risk Policy Types", "Which policy types have the highest loss ratios and total claims paid?"),
+            ("🔍 Forensic Fraud Analysis", "Show top claims flagged with high fraud risk scores."),
+            ("📉 Churn & Revenue at Risk", "What is the churn probability and total revenue at risk across customers?"),
+            ("📈 12-Month Trend Analytics", "Show monthly policy trends, retention rates, and acquisition growth."),
+            ("📋 Data Quality Audit", "Perform a data quality check on active policies and claim records.")
+        ]
+        for i, (label, prompt_text) in enumerate(suggestions):
+            target_col = sug_cols1[i] if i < 3 else sug_cols2[i - 3]
+            with target_col:
+                if st.button(label, key=f"dash_sug_{i}", use_container_width=True, help=prompt_text):
+                    st.session_state.selected_prompt = prompt_text
+                    st.rerun()
+
     # User Input
-    chat_val = st.chat_input(f"Ask Cortex Agent {current_agent} (with attached file or database inquiry)...")
+    chat_val = st.chat_input("Ask INSIGHT AI anything (e.g. policy coverage, claim analysis, state premiums)...")
     user_prompt = chat_val or st.session_state.selected_prompt
 
     if user_prompt:
         st.session_state.selected_prompt = None
         
-        # Check if an attachment should be merged into prompt
+        # Retrieval is the agent's job: its InsuranceDocs tool searches the corpus
+        # itself, so the question is forwarded untouched. Any attached-document
+        # scoping is applied by backend_service, which owns the attached_file arg.
         attached_doc_label = st.session_state.uploaded_doc_name
-        search_context = ""
-        
-        if attached_doc_label:
-            # ATTACHED FILE STRICT SCOPING: User has an active attached document.
-            # Fetch relevant chunks strictly for this document from Snowflake Cortex
-            cortex_chunks = backend_service.search_cortex_documents(
-                query=user_prompt, 
-                limit=8, 
-                filter_file=attached_doc_label, 
-                mgr=cached_sf_mgr
-            )
-            if cortex_chunks:
-                search_context = f"\n[ATTACHED DOCUMENT CONTEXT - {attached_doc_label}]:\n" + "\n---\n".join([
-                    f"(Chunk {c.get('CHUNK_INDEX', 0)} of {c.get('FILE_NAME', attached_doc_label)}):\n{c.get('CHUNK_TEXT', '')}"
-                    for c in cortex_chunks
-                ])
-            doc_text_snippet = f"\n{st.session_state.uploaded_doc_text[:12000]}" if st.session_state.uploaded_doc_text else ""
-            combined_prompt = f"""[ATTACHED CONTEXT - {attached_doc_label} (Stored in Snowflake @DOC_STAGE)]:
-{doc_text_snippet}
-{search_context}
-
-[USER QUESTION / INSTRUCTION]:
-{user_prompt}"""
-        else:
-            is_forecast_or_scenario = backend_service.is_demand_forecasting_query(user_prompt) or backend_service.is_scenario_query(user_prompt)
-            is_analytics = backend_service.is_analytical_query(user_prompt) or is_forecast_or_scenario
-            if not is_forecast_or_scenario and not is_analytics and backend_service.is_document_query(user_prompt):
-                cortex_chunks = backend_service.search_cortex_documents(
-                    query=user_prompt, 
-                    limit=5, 
-                    filter_file=None, 
-                    mgr=cached_sf_mgr
-                )
-                if cortex_chunks:
-                    search_context = "\n[SNOWFLAKE CORTEX SEARCH KNOWLEDGE]:\n" + "\n---\n".join([
-                        f"(From {c.get('FILE_NAME', 'DOC')} - {c.get('DOC_TYPE', 'DOC')}):\n{c.get('CHUNK_TEXT', '')}"
-                        for c in cortex_chunks
-                    ])
-                    combined_prompt = f"""{search_context}
-
-[USER QUESTION / INSTRUCTION]:
-{user_prompt}"""
-                else:
-                    combined_prompt = user_prompt
-            else:
-                combined_prompt = user_prompt
+        combined_prompt = user_prompt
 
         st.session_state.messages.append({
             "role": "user",
@@ -2378,14 +2062,14 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
                 </div>
             """, unsafe_allow_html=True)
 
-            res, endpoint_used, req_payload = call_cortex_agent(
-                base_url=API_BASE_URL,
+            res = call_cortex_agent(
                 db=current_db,
                 schema=current_sh,
                 agent=current_agent,
                 prompt=combined_prompt,
                 model=selected_model,
-                attached_file=attached_doc_label
+                attached_file=attached_doc_label,
+                mgr=cached_sf_mgr,
             )
 
             live_holder.empty()
@@ -2394,7 +2078,7 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
             sql_query = res.get("sql_query")
             query_data = res.get("data")
             thinking = res.get("thinking")
-            debug_info = {"request": req_payload, "response": res, "endpoint": endpoint_used}
+            debug_info = {"prompt": combined_prompt, "response": res, "metadata": res.get("metadata")}
 
             assistant_msg = {
                 "role": "assistant",
@@ -2406,7 +2090,7 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
                 "raw_payload": debug_info
             }
 
-            render_assistant_response(assistant_msg, msg_key_prefix="latest")
+            render_assistant_response(assistant_msg, msg_key_prefix="latest", mgr=cached_sf_mgr, env_config=env_config)
             st.session_state.messages.append(assistant_msg)
 
 
@@ -2415,56 +2099,837 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
 # ---------------------------------------------------------
 elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
     st.markdown("## ⚡ Multi-Dimensional Analytics Explorer")
-    st.caption("Slice, filter, and drill into live policy, claim, and geographic insurance metrics.")
+    st.caption("Slice and drill into live operations, customer, and market intelligence.")
 
-    exp_tab1, exp_tab2, exp_tab3 = st.tabs(["🏛️ Policies & Revenue", "🚨 Claims & Loss Ratios", "🗺️ Geographic Distribution"])
+    # Grouped sub-navigation rather than one row of seven tabs: the groups serve
+    # different audiences (analyst / CSR / executive) and keep any tab row to three
+    # labels so nothing is truncated on narrower screens.
+    if "explore_group" not in st.session_state:
+        st.session_state.explore_group = "🏛️ Operations"
 
-    with exp_tab1:
-        st.markdown("### Policy Types & Plan Tier Breakdown")
-        sql_exp_p = f"""SELECT 
-            POLICY_TYPE AS "Policy Type", 
-            COUNT(POLICY_ID) AS "Policies", 
-            CONCAT('$', TO_VARCHAR(ROUND(SUM(PREMIUM_AMOUNT), 2), '999,999,990.00')) AS "Revenue", 
-            CONCAT('$', TO_VARCHAR(ROUND(AVG(PREMIUM_AMOUNT), 2), '999,990.00')) AS "Avg Premium", 
-            TO_VARCHAR(ROUND(AVG(LOSS_RATIO), 2), '0.00') AS "Avg Loss Ratio" 
-        FROM {current_db}.CORE.POLICIES 
-        GROUP BY POLICY_TYPE 
-        ORDER BY SUM(PREMIUM_AMOUNT) DESC;"""
-        rows_p, _ = cached_sf_mgr.execute_query(sql_exp_p)
-        st.dataframe(pd.DataFrame(rows_p or []), use_container_width=True)
+    explore_group = st.segmented_control(
+        "Explorer area",
+        options=["🏛️ Operations", "👤 Customers & Ratings", "💡 Strategy & Market"],
+        default=st.session_state.explore_group,
+        key="explore_group_selector",
+        label_visibility="collapsed",
+    ) or st.session_state.explore_group
+    st.session_state.explore_group = explore_group
 
-    with exp_tab2:
-        st.markdown("### Claims Distribution by Status")
-        sql_exp_c = f"""SELECT 
-            COALESCE(CLAIM_STATUS, 'Approved') AS "Status", 
-            COUNT(CLAIM_ID) AS "Count" 
-        FROM {current_db}.CORE.CLAIMS 
-        GROUP BY CLAIM_STATUS 
-        ORDER BY "Count" DESC;"""
-        rows_c, _ = cached_sf_mgr.execute_query(sql_exp_c)
-        df_c = pd.DataFrame(rows_c or []).set_index("Status") if rows_c else pd.DataFrame()
-        if not df_c.empty:
-            st.bar_chart(df_c, use_container_width=True)
-        else:
-            st.info("No claims status records found.")
+    # ------------------------------------------------------------------
+    # GROUP 1: OPERATIONS
+    # ------------------------------------------------------------------
+    if explore_group == "🏛️ Operations":
+        exp_tab1, exp_tab2, exp_tab3 = st.tabs(
+            ["🏛️ Policies & Revenue", "🚨 Claims & Loss Ratios", "🗺️ Geographic Distribution"]
+        )
 
-    with exp_tab3:
-        st.markdown("### Top States by Premium Revenue")
-        sql_exp_g = f"""SELECT 
-            COALESCE(c.STATE, 'Unknown') AS "State", 
-            ROUND(SUM(p.PREMIUM_AMOUNT), 2) AS "Total Premium ($)", 
-            COUNT(p.POLICY_ID) AS "Policies" 
-        FROM {current_db}.CORE.POLICIES p 
-        JOIN {current_db}.CORE.CUSTOMERS c ON p.CUSTOMER_ID = c.CUSTOMER_ID 
-        GROUP BY c.STATE 
-        ORDER BY "Total Premium ($)" DESC 
-        LIMIT 10;"""
-        rows_g, _ = cached_sf_mgr.execute_query(sql_exp_g)
-        df_geo = pd.DataFrame(rows_g or []).set_index("State") if rows_g else pd.DataFrame()
-        if not df_geo.empty:
-            st.line_chart(df_geo, use_container_width=True)
-        else:
-            st.info("No geographic customer data found.")
+        with exp_tab1:
+            st.markdown("### Policy Types & Plan Tier Breakdown")
+            # Values are returned as numbers and formatted in the dataframe, so the
+            # columns remain numerically sortable. Formatting them in SQL with
+            # CONCAT/TO_VARCHAR produced strings that sorted lexicographically.
+            sql_exp_p = f"""SELECT 
+                POLICY_TYPE AS "Policy Type", 
+                COUNT(POLICY_ID) AS "Policies", 
+                ROUND(SUM(PREMIUM_AMOUNT), 2) AS "Revenue", 
+                ROUND(AVG(PREMIUM_AMOUNT), 2) AS "Avg Premium", 
+                ROUND(AVG(LOSS_RATIO) * 100.0, 1) AS "Avg Loss Ratio %" 
+            FROM {current_db}.CORE.POLICIES 
+            GROUP BY POLICY_TYPE 
+            ORDER BY SUM(PREMIUM_AMOUNT) DESC;"""
+            rows_p, _ = cached_sf_mgr.execute_query(sql_exp_p)
+            if rows_p is None:
+                st.error(f"❌ Query failed: {cached_sf_mgr.get_last_error()}")
+            elif not rows_p:
+                st.info("No policy records found.")
+            else:
+                st.dataframe(
+                    pd.DataFrame(rows_p),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Revenue": st.column_config.NumberColumn("Revenue", format="$%.2f"),
+                        "Avg Premium": st.column_config.NumberColumn("Avg Premium", format="$%.2f"),
+                        "Avg Loss Ratio %": st.column_config.NumberColumn("Avg Loss Ratio %", format="%.1f%%"),
+                    },
+                )
+
+        with exp_tab2:
+            st.markdown("### Claims Distribution by Status")
+            # Group on the coalesced expression. Previously the SELECT coalesced NULL to
+            # 'Approved' but the GROUP BY used the raw column, so NULL statuses were
+            # displayed as genuine approvals.
+            sql_exp_c = f"""SELECT 
+                COALESCE(CLAIM_STATUS, 'Unspecified') AS "Status", 
+                COUNT(CLAIM_ID) AS "Count" 
+            FROM {current_db}.CORE.CLAIMS 
+            GROUP BY COALESCE(CLAIM_STATUS, 'Unspecified')
+            ORDER BY "Count" DESC;"""
+            rows_c, _ = cached_sf_mgr.execute_query(sql_exp_c)
+            if rows_c is None:
+                st.error(f"❌ Query failed: {cached_sf_mgr.get_last_error()}")
+            elif not rows_c:
+                st.info("No claims status records found.")
+            else:
+                df_c = pd.DataFrame(rows_c)
+                st.bar_chart(df_c.set_index("Status"), use_container_width=True, height=280)
+                st.dataframe(df_c, use_container_width=True, hide_index=True)
+
+        with exp_tab3:
+            st.markdown("### States by Premium Revenue")
+            top_n = st.slider("States to show", min_value=3, max_value=15, value=10, key="exp_geo_topn")
+            sql_exp_g = f"""SELECT 
+                COALESCE(c.STATE, 'Unknown') AS "State", 
+                ROUND(SUM(p.PREMIUM_AMOUNT), 2) AS "Total Premium", 
+                COUNT(p.POLICY_ID) AS "Policies" 
+            FROM {current_db}.CORE.POLICIES p 
+            JOIN {current_db}.CORE.CUSTOMERS c ON p.CUSTOMER_ID = c.CUSTOMER_ID 
+            GROUP BY COALESCE(c.STATE, 'Unknown')
+            ORDER BY "Total Premium" DESC 
+            LIMIT {int(top_n)};"""
+            rows_g, _ = cached_sf_mgr.execute_query(sql_exp_g)
+            if rows_g is None:
+                st.error(f"❌ Query failed: {cached_sf_mgr.get_last_error()}")
+            elif not rows_g:
+                st.info("No geographic customer data found.")
+            else:
+                df_geo = pd.DataFrame(rows_g)
+                # Bar, not line: states are categorical and a line implies continuity
+                # between them.
+                st.bar_chart(df_geo.set_index("State")[["Total Premium"]],
+                             use_container_width=True, height=300)
+                st.dataframe(
+                    df_geo, use_container_width=True, hide_index=True,
+                    column_config={
+                        "Total Premium": st.column_config.NumberColumn("Total Premium", format="$%.2f")
+                    },
+                )
+
+    # ------------------------------------------------------------------
+    # GROUP 2: CUSTOMERS & RATINGS
+    # ------------------------------------------------------------------
+    elif explore_group == "👤 Customers & Ratings":
+        cust_tab, ratings_tab = st.tabs(["👤 Customer Directory & Plan Rating", "⭐ Plan Rating Analytics"])
+
+        with cust_tab:
+            st.markdown("### Customer Directory")
+            st.caption(
+                "Select a customer to see their matched plans and submit a rating. "
+                "Ratings are written through `SP_RATE_PLAN` — the same procedure the agent's "
+                "RatePlan tool uses."
+            )
+
+            f_search, f_state, f_limit = st.columns([4, 2, 2])
+            with f_search:
+                cust_search = st.text_input(
+                    "Search by name, ID or email", value="", key="exp_cust_search",
+                    placeholder="e.g. John, CUST-00012, @email",
+                )
+            with f_state:
+                state_opts = ["All", "TX", "CA", "PA", "IL", "AZ", "NY", "GA"]
+                cust_state = st.selectbox("State", state_opts, key="exp_cust_state")
+            with f_limit:
+                cust_limit = st.selectbox("Rows", [50, 100, 200, 500], index=2, key="exp_cust_limit")
+
+            directory = fetch_customer_directory(
+                search=cust_search or None,
+                state=None if cust_state == "All" else cust_state,
+                limit=int(cust_limit),
+            )
+
+            if not directory:
+                st.info("No customers match the current filters.")
+            else:
+                df_dir = pd.DataFrame(directory)
+                st.caption(f"Showing **{len(df_dir):,}** customers")
+                st.dataframe(
+                    df_dir,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=280,
+                    column_config={
+                        "CUSTOMER_ID": st.column_config.TextColumn("Customer ID", width="small"),
+                        "CUSTOMER_NAME": st.column_config.TextColumn("Name", width="medium"),
+                        "AGE": st.column_config.NumberColumn("Age", width="small"),
+                        "ANNUAL_INCOME": st.column_config.NumberColumn("Income", format="$%.0f"),
+                        "CREDIT_SCORE": st.column_config.NumberColumn("Credit", width="small"),
+                        "TOTAL_PREMIUM": st.column_config.NumberColumn("Premium", format="$%.2f"),
+                        "POLICY_COUNT": st.column_config.NumberColumn("Policies", width="small"),
+                        "MATCH_COUNT": st.column_config.NumberColumn("Matches", width="small"),
+                        "RATING_COUNT": st.column_config.NumberColumn("Ratings", width="small"),
+                    },
+                )
+
+                label_by_id = {
+                    r["CUSTOMER_ID"]: f"{r['CUSTOMER_ID']} — {r['CUSTOMER_NAME']} ({r.get('STATE') or '—'})"
+                    for r in directory
+                }
+                sel_customer = st.selectbox(
+                    "Selected customer",
+                    options=list(label_by_id.keys()),
+                    format_func=lambda cid: label_by_id.get(cid, cid),
+                    key="exp_sel_customer",
+                )
+
+                c360 = fetch_customer_360(sel_customer)
+
+                if c360.get("status") != "success":
+                    st.warning(
+                        f"Could not load the full profile for `{sel_customer}`: "
+                        f"{c360.get('message', 'unknown error')}"
+                    )
+                else:
+                    prof = c360["profile"]
+                    summ = c360["summary"]
+
+                    st.markdown(
+                        f"#### 👤 {prof.get('CUSTOMER_NAME') or sel_customer} "
+                        f"<span style='color:#64748B;font-size:0.8rem;'>`{sel_customer}`</span>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(
+                        f"{prof.get('OCCUPATION') or 'Occupation unknown'} • "
+                        f"{prof.get('CITY') or '—'}, {prof.get('STATE') or '—'} "
+                        f"{prof.get('ZIP_CODE') or ''} • Age {prof.get('AGE') or '—'} • "
+                        f"{prof.get('MARITAL_STATUS') or '—'} • "
+                        f"Customer since {str(prof.get('CUSTOMER_SINCE') or '—')[:10]} • "
+                        f"{prof.get('EMAIL') or 'no email'}"
+                    )
+
+                    k1, k2, k3, k4, k5 = st.columns(5)
+                    k1.metric("Policies", f"{summ['policy_count']}",
+                              f"{summ['active_policy_count']} active" if summ['policy_count'] else None,
+                              delta_color="off")
+                    k2.metric("Written Premium", f"${summ['total_premium']:,.0f}")
+                    k3.metric("Claims", f"{summ['claim_count']}",
+                              f"${summ['total_claimed']:,.0f} claimed" if summ['claim_count'] else None,
+                              delta_color="off")
+                    # None means there is no premium to divide by, so no ratio is shown
+                    # rather than a misleading 0.0%.
+                    k4.metric("Claims / Premium",
+                              f"{summ['loss_ratio_pct']:.1f}%" if summ['loss_ratio_pct'] is not None else "n/a",
+                              help="Total claimed amount as a percentage of written premium")
+                    k5.metric("Churn Risk",
+                              f"{summ['max_churn_probability'] * 100:.0f}%" if summ['max_churn_probability'] is not None else "No prediction",
+                              help="Highest churn probability across this customer's policies")
+
+                    risk_bits = []
+                    if summ["policies_at_risk"]:
+                        risk_bits.append(
+                            f"⚠️ **{summ['policies_at_risk']}** policy(ies) flagged at risk, "
+                            f"**${summ['revenue_at_risk']:,.0f}** revenue at risk"
+                        )
+                    if summ["fraud_claim_count"]:
+                        risk_bits.append(f"🚩 **{summ['fraud_claim_count']}** fraud-flagged claim(s)")
+                    if summ["avg_rating"] is not None:
+                        risk_bits.append(
+                            f"⭐ **{summ['avg_rating']:.2f}** average rating from "
+                            f"{summ['rating_count']} review(s)"
+                        )
+                    if risk_bits:
+                        st.markdown(" &nbsp;·&nbsp; ".join(risk_bits))
+
+                    c360_tabs = st.tabs([
+                        f"📋 Policies ({summ['policy_count']})",
+                        f"🧾 Claims ({summ['claim_count']})",
+                        f"📉 Risk & Churn ({summ['policies_at_risk']})",
+                        f"⭐ Ratings ({summ['rating_count']})",
+                    ])
+
+                    with c360_tabs[0]:
+                        if c360["policies"]:
+                            st.dataframe(
+                                pd.DataFrame(c360["policies"]),
+                                width="stretch", hide_index=True,
+                                column_config={
+                                    "PREMIUM_AMOUNT": st.column_config.NumberColumn("Premium", format="$%.0f"),
+                                    "COVERAGE_AMOUNT": st.column_config.NumberColumn("Coverage", format="$%.0f"),
+                                    "DEDUCTIBLE": st.column_config.NumberColumn("Deductible", format="$%.0f"),
+                                    "LOSS_RATIO": st.column_config.NumberColumn("Loss Ratio", format="%.2f"),
+                                },
+                            )
+                        else:
+                            st.info("No policies in CORE.POLICIES for this customer.")
+
+                    with c360_tabs[1]:
+                        if c360["claims"]:
+                            st.dataframe(
+                                pd.DataFrame(c360["claims"]),
+                                width="stretch", hide_index=True,
+                                column_config={
+                                    "CLAIM_AMOUNT": st.column_config.NumberColumn("Claimed", format="$%.0f"),
+                                    "APPROVED_AMOUNT": st.column_config.NumberColumn("Approved", format="$%.0f"),
+                                    "FRAUD_SCORE": st.column_config.ProgressColumn(
+                                        "Fraud Score", min_value=0.0, max_value=1.0, format="%.2f"
+                                    ),
+                                },
+                            )
+                        else:
+                            st.info("No claims in CORE.CLAIMS for this customer.")
+
+                    with c360_tabs[2]:
+                        if c360["at_risk"]:
+                            st.caption("RISK.AT_RISK_POLICIES — latest identification per policy")
+                            st.dataframe(
+                                pd.DataFrame(c360["at_risk"]),
+                                width="stretch", hide_index=True,
+                                column_config={
+                                    "REVENUE_AT_RISK": st.column_config.NumberColumn("Revenue at Risk", format="$%.0f"),
+                                    "CHURN_PROBABILITY": st.column_config.ProgressColumn(
+                                        "Churn Prob.", min_value=0.0, max_value=1.0, format="%.2f"
+                                    ),
+                                },
+                            )
+                        else:
+                            st.info("Not flagged in RISK.AT_RISK_POLICIES.")
+
+                        if c360["churn"]:
+                            st.caption(
+                                "RISK.CHURN_PREDICTIONS — latest prediction per policy. "
+                                "The table holds multiple predictions per policy, so it is "
+                                "deduped here rather than showing every historic run."
+                            )
+                            st.dataframe(
+                                pd.DataFrame(c360["churn"]),
+                                width="stretch", hide_index=True,
+                                column_config={
+                                    "CHURN_PROBABILITY": st.column_config.ProgressColumn(
+                                        "Churn Prob.", min_value=0.0, max_value=1.0, format="%.2f"
+                                    ),
+                                    "CONFIDENCE_SCORE": st.column_config.NumberColumn("Confidence", format="%.2f"),
+                                },
+                            )
+                        else:
+                            st.info("No churn predictions for this customer.")
+
+                    with c360_tabs[3]:
+                        if c360["ratings"]:
+                            st.dataframe(
+                                pd.DataFrame(c360["ratings"]),
+                                width="stretch", hide_index=True,
+                                column_config={
+                                    "RATING": st.column_config.NumberColumn("★", format="%.1f"),
+                                    "REVIEW_TEXT": st.column_config.TextColumn("Review", width="large"),
+                                },
+                            )
+                        else:
+                            st.info("This customer has not rated any plan yet.")
+
+
+                st.markdown("#### 🎯 Matched Plans")
+                matches = fetch_customer_matches(sel_customer)
+
+                if not matches:
+                    st.info(
+                        "No saved product matches for this customer. Only 10 of 250 customers "
+                        "ship with matches; generating them calls Cortex, so it runs on request."
+                    )
+                    if st.button("⚙ Generate Matches", key="exp_gen_matches", type="primary"):
+                        with st.spinner("Running SP_PRODUCT_MATCH_AND_SAVE via Snowflake Cortex..."):
+                            gen = backend_service.generate_customer_matches(
+                                customer_id=sel_customer, mgr=cached_sf_mgr
+                            )
+                        if gen.get("status") == "success":
+                            clear_rating_caches()
+                            st.success("Matches generated.")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Match generation failed: {gen.get('message')}")
+                else:
+                    df_m = pd.DataFrame(matches)
+                    st.dataframe(
+                        df_m[["MATCH_RANK", "PRODUCT_ID", "PRODUCT_NAME", "CATEGORY",
+                              "PLAN_TIER", "OVERALL_SCORE", "STRATEGY_SCORES"]],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "MATCH_RANK": st.column_config.NumberColumn("Rank", width="small"),
+                            "OVERALL_SCORE": st.column_config.ProgressColumn(
+                                "Match Score", min_value=0.0, max_value=100.0, format="%.1f"
+                            ),
+                            "STRATEGY_SCORES": st.column_config.TextColumn("Strategy Scores", width="medium"),
+                        },
+                    )
+
+                    rate_label = {
+                        m["PRODUCT_ID"]: f"#{m['MATCH_RANK']} {m['PRODUCT_NAME']} "
+                                         f"({m['CATEGORY']}/{m['PLAN_TIER']})"
+                        for m in matches
+                    }
+                    r_col1, r_col2 = st.columns([5, 2])
+                    with r_col1:
+                        sel_product = st.selectbox(
+                            "Plan to rate",
+                            options=list(rate_label.keys()),
+                            format_func=lambda pid: rate_label.get(pid, pid),
+                            key="exp_sel_product",
+                        )
+                    with r_col2:
+                        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                        open_dialog = st.button("⭐ Rate This Plan", key="exp_open_rating",
+                                                type="primary", use_container_width=True)
+
+                    # The form lives in a dialog so submitting it redraws the modal rather
+                    # than every sibling tab.
+                    @st.dialog("Rate Plan")
+                    def _rating_dialog(customer_id: str, product_id: str, product_label: str):
+                        st.markdown(f"**Customer:** `{customer_id}`")
+                        st.markdown(f"**Plan:** {product_label}")
+                        st.divider()
+
+                        stars = st.feedback("stars", key="exp_rating_stars")
+                        review = st.text_area(
+                            "Review (optional)", key="exp_rating_review",
+                            placeholder="What did the customer say about this plan?",
+                            height=110,
+                        )
+                        st.caption("Ratings are 1–5 stars and update the plan's average immediately.")
+
+                        if st.button("Submit Rating", type="primary", use_container_width=True,
+                                     key="exp_rating_submit"):
+                            if stars is None:
+                                st.warning("Select a star rating before submitting.")
+                            else:
+                                # st.feedback returns 0-4; SP_RATE_PLAN expects 1.0-5.0.
+                                value = float(stars) + 1.0
+                                with st.spinner("Submitting via SP_RATE_PLAN..."):
+                                    res = backend_service.submit_plan_rating(
+                                        customer_id=customer_id,
+                                        product_id=product_id,
+                                        rating=value,
+                                        review_text=review or None,
+                                        mgr=cached_sf_mgr,
+                                    )
+                                if res.get("status") == "success":
+                                    out = res.get("result", {})
+                                    clear_rating_caches()
+                                    st.success(
+                                        f"✅ Recorded **{value:.1f}★** as `{out.get('rating_id', '—')}`. "
+                                        f"Average moved {out.get('old_avg_rating', '—')} → "
+                                        f"**{out.get('new_avg_rating', '—')}** "
+                                        f"across {out.get('total_reviews', '—')} review(s)."
+                                    )
+                                    st.button("Close", key="exp_rating_close")
+                                else:
+                                    st.error(f"❌ {res.get('message')}")
+
+                    if open_dialog:
+                        _rating_dialog(sel_customer, sel_product, rate_label.get(sel_product, sel_product))
+
+        with ratings_tab:
+            st.markdown("### Plan Rating Analytics")
+            ratings = fetch_plan_ratings_summary()
+
+            if ratings.get("status") != "success":
+                st.error(f"❌ Could not load rating summary: {ratings.get('message')}")
+            else:
+                products = ratings["products"]
+                rt1, rt2, rt3 = st.columns(3)
+                rt1.metric("Products", f"{ratings['product_count']}")
+                rt2.metric("Total Reviews", f"{ratings['total_reviews']:,}")
+                rt3.metric("Products with Reviews", f"{ratings['rated_products']}")
+
+                if ratings["total_reviews"] < ratings["product_count"]:
+                    # Be explicit: the displayed average is seeded catalog data, not
+                    # aggregated customer feedback.
+                    st.info(
+                        "ℹ️ Most products show a **seeded baseline rating** from "
+                        "`PRODUCT_CATALOG` with zero customer reviews behind it. Averages only "
+                        "reflect real feedback once reviews are submitted."
+                    )
+
+                df_r = pd.DataFrame(products)
+                st.dataframe(
+                    df_r[["PRODUCT_ID", "PRODUCT_NAME", "CATEGORY", "PLAN_TIER",
+                          "CURRENT_AVG_RATING", "TOTAL_REVIEWS", "FIVE_STAR", "FOUR_STAR",
+                          "THREE_STAR", "TWO_STAR", "ONE_STAR"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "CURRENT_AVG_RATING": st.column_config.NumberColumn("Avg ★", format="%.1f"),
+                        "TOTAL_REVIEWS": st.column_config.NumberColumn("Reviews", width="small"),
+                    },
+                )
+
+                st.markdown("##### Average Rating by Category")
+                df_cat = (
+                    df_r.groupby("CATEGORY", as_index=False)["CURRENT_AVG_RATING"]
+                    .mean().round(2).sort_values("CURRENT_AVG_RATING", ascending=False)
+                )
+                st.bar_chart(df_cat.set_index("CATEGORY"), use_container_width=True, height=260)
+
+    # ------------------------------------------------------------------
+    # GROUP 3: STRATEGY & MARKET
+    # ------------------------------------------------------------------
+    else:
+        strat_tab, market_tab, telemetry_tab = st.tabs(
+            ["💡 Strategic Recommendations", "📈 Market & Pricing", "🛰️ Agent Telemetry"]
+        )
+
+        with strat_tab:
+            recs = fetch_strategic_recommendations()
+
+            if recs.get("status") != "success":
+                st.error(f"❌ Could not load recommendations: {recs.get('message')}")
+            else:
+                rec_rows = recs["recommendations"]
+                head_l, head_r = st.columns([6, 2])
+                with head_l:
+                    st.markdown("### Strategic Recommendation Engine")
+                    gen_at = str(recs.get("generated_at") or "")[:19].replace("T", " ")
+                    st.caption(
+                        f"AI-generated from live pricing, churn and loss-ratio signals • "
+                        f"batch `{recs.get('batch_id') or '—'}` • generated **{gen_at or 'unknown'}**"
+                    )
+                with head_r:
+                    st.markdown("<div style='height: 26px;'></div>", unsafe_allow_html=True)
+                    if st.button("🔄 Regenerate", key="exp_regen_recs", use_container_width=True):
+                        with st.spinner("Running SP_GENERATE_RECOMMENDATIONS via Cortex..."):
+                            out = backend_service.regenerate_strategic_recommendations(mgr=cached_sf_mgr)
+                        if out.get("status") == "success":
+                            fetch_strategic_recommendations.clear()
+                            st.success("Recommendations regenerated.")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Regeneration failed: {out.get('message')}")
+
+                pc = recs["priority_counts"]
+                k1, k2, k3 = st.columns(3)
+                k1.metric("🔴 High Priority", pc.get("HIGH", 0))
+                k2.metric("🟠 Medium", pc.get("MEDIUM", 0))
+                k3.metric("🟢 Low", pc.get("LOW", 0))
+
+                prio_filter = st.multiselect(
+                    "Filter by priority",
+                    options=["HIGH", "MEDIUM", "LOW"],
+                    default=["HIGH", "MEDIUM", "LOW"],
+                    key="exp_rec_prio",
+                )
+
+                shown = [r for r in rec_rows if str(r.get("PRIORITY", "")).upper() in prio_filter]
+                if not shown:
+                    st.info("No recommendations match the selected priorities.")
+
+                prio_style = {
+                    "HIGH": ("#F87171", "rgba(239, 68, 68, 0.35)"),
+                    "MEDIUM": ("#FBBF24", "rgba(245, 158, 11, 0.35)"),
+                    "LOW": ("#34D399", "rgba(16, 185, 129, 0.30)"),
+                }
+
+                for rec in shown:
+                    prio = str(rec.get("PRIORITY", "LOW")).upper()
+                    colour, border = prio_style.get(prio, prio_style["LOW"])
+                    st.markdown(f"""
+                        <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid {border};
+                                    border-left: 4px solid {colour}; border-radius: 10px;
+                                    padding: 14px 18px; margin-bottom: 12px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;
+                                        margin-bottom: 8px;">
+                                <span style="font-weight: 800; font-size: 1.0rem; color: #F1F5F9;">
+                                    {html.escape(str(rec.get('HEADLINE') or '—'))}
+                                </span>
+                                <span style="font-size: 0.70rem; font-weight: 700; color: {colour};
+                                             border: 1px solid {border}; border-radius: 10px;
+                                             padding: 2px 9px; white-space: nowrap;">
+                                    {html.escape(prio)} • {html.escape(str(rec.get('CATEGORY') or '—'))}
+                                </span>
+                            </div>
+                            <div style="color: #CBD5E1; font-size: 0.86rem; line-height: 1.5;
+                                        margin-bottom: 10px;">
+                                {html.escape(str(rec.get('DETAILS') or ''))}
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+                                        font-size: 0.80rem;">
+                                <div>
+                                    <div style="color: #94A3B8; font-size: 0.68rem;
+                                                text-transform: uppercase;">Action</div>
+                                    <div style="color: #E2E8F0;">
+                                        {html.escape(str(rec.get('ACTION_ITEM') or '—'))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <div style="color: #94A3B8; font-size: 0.68rem;
+                                                text-transform: uppercase;">Estimated Impact</div>
+                                    <div style="color: #34D399; font-weight: 600;">
+                                        {html.escape(str(rec.get('ESTIMATED_IMPACT') or '—'))}
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="color: #64748B; font-size: 0.70rem; margin-top: 9px;">
+                                Source: <code>{html.escape(str(rec.get('DATA_SOURCE') or '—'))}</code>
+                                • {html.escape(str(rec.get('REC_ID') or ''))}
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+        with market_tab:
+            st.markdown("### Market Position & Competitor Pricing")
+            market = fetch_market_pricing()
+
+            if market.get("status") != "success":
+                st.error(f"❌ Could not load market data: {market.get('message')}")
+            else:
+                comparison = market["comparison"]
+                pos = market["position_counts"]
+                trends = market["trend_counts"]
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Products Benchmarked", len(comparison))
+                m2.metric("Competitively Priced", pos.get("COMPETITIVE", 0))
+                m3.metric("Underpriced", pos.get("UNDERPRICED", 0))
+                m4.metric("Overpriced", pos.get("OVERPRICED", 0) + pos.get("SLIGHTLY HIGH", 0))
+
+                st.caption(
+                    "Market movement across competitor products: "
+                    + " • ".join(f"**{k.title()}** {v}" for k, v in sorted(trends.items()))
+                )
+
+                df_cmp = pd.DataFrame(comparison)
+                for col in ["OUR_PREMIUM", "COMP_AVG_PREMIUM", "PRICE_DIFF_PCT",
+                            "OUR_RATING", "COMP_AVG_RATING"]:
+                    if col in df_cmp.columns:
+                        df_cmp[col] = pd.to_numeric(df_cmp[col], errors="coerce")
+
+                st.markdown("##### Our Premium vs Competitor Average")
+                scatter_spec = {
+                    "mark": {"type": "circle", "size": 130, "opacity": 0.85},
+                    "encoding": {
+                        "x": {"field": "COMP_AVG_PREMIUM", "type": "quantitative",
+                              "title": "Competitor Avg Premium ($)"},
+                        "y": {"field": "OUR_PREMIUM", "type": "quantitative",
+                              "title": "Our Premium ($)"},
+                        "color": {
+                            "field": "PRICE_POSITION", "type": "nominal",
+                            "legend": {"title": None, "orient": "bottom",
+                                       "labelColor": "#94A3B8", "symbolType": "circle"},
+                        },
+                        "tooltip": [
+                            {"field": "OUR_PRODUCT", "type": "nominal", "title": "Product"},
+                            {"field": "CATEGORY", "type": "nominal", "title": "Category"},
+                            {"field": "PLAN_TIER", "type": "nominal", "title": "Tier"},
+                            {"field": "OUR_PREMIUM", "type": "quantitative",
+                             "title": "Our Premium", "format": "$,.2f"},
+                            {"field": "COMP_AVG_PREMIUM", "type": "quantitative",
+                             "title": "Competitor Avg", "format": "$,.2f"},
+                            {"field": "PRICE_DIFF_PCT", "type": "quantitative",
+                             "title": "Difference (%)", "format": ".2f"},
+                            {"field": "OUR_RATING", "type": "quantitative",
+                             "title": "Our Rating", "format": ".1f"},
+                            {"field": "COMP_AVG_RATING", "type": "quantitative",
+                             "title": "Competitor Rating", "format": ".1f"},
+                            {"field": "COMPETITOR_COUNT", "type": "quantitative", "title": "Competitors"},
+                            {"field": "NEW_ENTRANTS", "type": "quantitative", "title": "New Entrants"},
+                            {"field": "EXITING", "type": "quantitative", "title": "Exiting"},
+                            {"field": "PRICE_POSITION", "type": "nominal", "title": "Position"},
+                        ],
+                    },
+                    "view": {"stroke": None},
+                    "background": "transparent",
+                }
+                st.vega_lite_chart(df_cmp, scatter_spec, use_container_width=True, height=330)
+                st.caption("Points above the diagonal are priced above the market; hover for full detail.")
+
+                st.markdown("##### Price Positioning Detail")
+                st.dataframe(
+                    df_cmp[["CATEGORY", "PLAN_TIER", "OUR_PRODUCT", "OUR_PREMIUM",
+                            "COMP_AVG_PREMIUM", "PRICE_DIFF_PCT", "OUR_RATING",
+                            "COMP_AVG_RATING", "COMPETITOR_COUNT", "NEW_ENTRANTS",
+                            "EXITING", "PRICE_POSITION"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    height=300,
+                    column_config={
+                        "OUR_PREMIUM": st.column_config.NumberColumn("Our Premium", format="$%.2f"),
+                        "COMP_AVG_PREMIUM": st.column_config.NumberColumn("Comp Avg", format="$%.2f"),
+                        "PRICE_DIFF_PCT": st.column_config.NumberColumn("Diff %", format="%.2f%%"),
+                        "OUR_RATING": st.column_config.NumberColumn("Our ★", format="%.1f"),
+                        "COMP_AVG_RATING": st.column_config.NumberColumn("Comp ★", format="%.1f"),
+                    },
+                )
+
+                with st.expander("🏢 Competitor Product Detail", expanded=False):
+                    df_comp = pd.DataFrame(market["competitors"])
+                    cat_opts = ["All"] + sorted(df_comp["CATEGORY"].dropna().unique().tolist())
+                    pick_cat = st.selectbox("Category", cat_opts, key="exp_comp_cat")
+                    if pick_cat != "All":
+                        df_comp = df_comp[df_comp["CATEGORY"] == pick_cat]
+                    st.dataframe(
+                        df_comp,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=300,
+                        column_config={
+                            "MONTHLY_PREMIUM": st.column_config.NumberColumn("Premium", format="$%.2f"),
+                            "COVERAGE_LIMIT": st.column_config.NumberColumn("Coverage", format="$%.0f"),
+                            "CUSTOMER_RATING": st.column_config.NumberColumn("★", format="%.1f"),
+                            "MARKET_SHARE_PCT": st.column_config.NumberColumn("Share %", format="%.2f%%"),
+                        },
+                    )
+
+        with telemetry_tab:
+            st.markdown("### Agent Telemetry")
+            st.caption(
+                "Measured from the telemetry columns on `UNIFIEDAI_SH.CHAT_HISTORY`. "
+                "Latency is wall-clock time for the agent call, recorded per turn."
+            )
+
+            tel_c1, tel_c2 = st.columns([1, 1])
+            with tel_c1:
+                tel_window = st.selectbox(
+                    "Window", options=[7, 30, 90, 365],
+                    format_func=lambda d: f"Last {d} days",
+                    index=1, key="exp_tel_window",
+                )
+            with tel_c2:
+                tel_scope = st.selectbox(
+                    "Scope", options=["All users", current_user],
+                    index=0, key="exp_tel_scope",
+                )
+
+            tel = fetch_agent_telemetry(
+                days=tel_window,
+                user_name=None if tel_scope == "All users" else current_user,
+            )
+
+            if tel.get("status") != "success":
+                st.error(f"❌ Could not load telemetry: {tel.get('message')}")
+            elif tel["turns"] == 0:
+                st.info(
+                    f"No assistant turns recorded in the last {tel['window_days']} days"
+                    + ("" if tel_scope == "All users" else f" for {current_user}")
+                    + ". Ask the agent a question on the Enterprise AI page to populate this."
+                )
+            else:
+                def _ms(val):
+                    """Seconds when the value is large enough to warrant it, else ms."""
+                    if val is None:
+                        return "Not recorded"
+                    v = float(val)
+                    return f"{v / 1000:.1f}s" if v >= 1000 else f"{v:.0f}ms"
+
+                t1, t2, t3, t4, t5 = st.columns(5)
+                t1.metric("Agent Turns", f"{tel['turns']:,}",
+                          f"{tel['sessions']} session(s)", delta_color="off")
+                t2.metric("Median Latency", _ms(tel["p50_latency_ms"]))
+                t3.metric("P95 Latency", _ms(tel["p95_latency_ms"]),
+                          help="95th percentile - the slow tail users actually notice")
+                t4.metric("Slowest Turn", _ms(tel["max_latency_ms"]))
+                t5.metric("Error Rate",
+                          f"{tel['error_rate_pct']:.1f}%" if tel["error_rate_pct"] is not None else "n/a",
+                          f"{tel['errors']} error(s)" if tel["errors"] else "no errors",
+                          delta_color="inverse" if tel["errors"] else "off")
+
+                st.caption(
+                    f"🧠 **{tel['turns_with_sql']}** turn(s) generated SQL &nbsp;·&nbsp; "
+                    f"📎 **{tel['turns_with_doc']}** used an attached document &nbsp;·&nbsp; "
+                    f"👥 **{tel['users']}** user(s)"
+                )
+
+                # Turns written before the telemetry columns existed have no latency. They
+                # are called out rather than quietly averaged in as zero.
+                if tel["turns_without_telemetry"]:
+                    st.caption(
+                        f"ℹ️ {tel['turns_without_telemetry']} of {tel['turns']} turn(s) predate "
+                        "latency capture and are excluded from the latency figures above."
+                    )
+
+                if tel["daily"]:
+                    st.markdown("##### Turns & Latency by Day")
+                    df_daily = pd.DataFrame(tel["daily"])
+                    for col in ("TURNS", "AVG_LATENCY_MS", "ERRORS"):
+                        df_daily[col] = pd.to_numeric(df_daily[col], errors="coerce")
+                    st.vega_lite_chart(
+                        df_daily,
+                        {
+                            "layer": [
+                                {
+                                    "mark": {"type": "bar", "opacity": 0.75},
+                                    "encoding": {
+                                        "y": {"field": "TURNS", "type": "quantitative",
+                                              "title": "Turns"},
+                                    },
+                                },
+                                {
+                                    "mark": {"type": "line", "point": True, "strokeWidth": 2},
+                                    "encoding": {
+                                        "y": {"field": "AVG_LATENCY_MS", "type": "quantitative",
+                                              "title": "Avg Latency (ms)"},
+                                    },
+                                },
+                            ],
+                            "encoding": {
+                                "x": {"field": "DAY", "type": "temporal", "title": None},
+                                "tooltip": [
+                                    {"field": "DAY", "type": "temporal", "title": "Day"},
+                                    {"field": "TURNS", "type": "quantitative", "title": "Turns"},
+                                    {"field": "AVG_LATENCY_MS", "type": "quantitative",
+                                     "title": "Avg Latency (ms)", "format": ",.0f"},
+                                    {"field": "ERRORS", "type": "quantitative", "title": "Errors"},
+                                ],
+                            },
+                            "resolve": {"scale": {"y": "independent"}},
+                            "view": {"stroke": None},
+                            "background": "transparent",
+                        },
+                        use_container_width=True, height=280,
+                    )
+
+                tel_left, tel_right = st.columns(2)
+                with tel_left:
+                    st.markdown("##### Tool Usage")
+                    if tel["by_tool"]:
+                        st.dataframe(
+                            pd.DataFrame(tel["by_tool"]), width="stretch", hide_index=True,
+                            column_config={
+                                "TOOL": st.column_config.TextColumn("Tool"),
+                                "INVOCATIONS": st.column_config.NumberColumn("Turns Used"),
+                                "AVG_TURN_LATENCY_MS": st.column_config.NumberColumn(
+                                    "Avg Turn Latency (ms)", format="%.0f"),
+                            },
+                        )
+                    else:
+                        st.info(
+                            "No tool names recorded yet. Tool capture starts with the next "
+                            "agent turn."
+                        )
+
+                with tel_right:
+                    st.markdown("##### By Engine")
+                    st.dataframe(
+                        pd.DataFrame(tel["by_engine"]), width="stretch", hide_index=True,
+                        column_config={
+                            "ENGINE": st.column_config.TextColumn("Engine"),
+                            "TURNS": st.column_config.NumberColumn("Turns"),
+                            "AVG_LATENCY_MS": st.column_config.NumberColumn(
+                                "Avg Latency (ms)", format="%.0f"),
+                            "ERRORS": st.column_config.NumberColumn("Errors"),
+                        },
+                    )
+                    st.markdown("##### By Model")
+                    st.dataframe(
+                        pd.DataFrame(tel["by_model"]), width="stretch", hide_index=True,
+                        column_config={
+                            "MODEL": st.column_config.TextColumn("Model"),
+                            "TURNS": st.column_config.NumberColumn("Turns"),
+                            "AVG_LATENCY_MS": st.column_config.NumberColumn(
+                                "Avg (ms)", format="%.0f"),
+                            "MAX_LATENCY_MS": st.column_config.NumberColumn(
+                                "Max (ms)", format="%.0f"),
+                        },
+                    )
+
+                if tel["slowest_turns"]:
+                    with st.expander("🐢 Slowest Turns", expanded=False):
+                        st.dataframe(
+                            pd.DataFrame(tel["slowest_turns"]), width="stretch", hide_index=True,
+                            column_config={
+                                "LATENCY_MS": st.column_config.NumberColumn(
+                                    "Latency (ms)", format="%.0f"),
+                                "RESPONSE_PREVIEW": st.column_config.TextColumn(
+                                    "Response", width="large"),
+                            },
+                        )
 
 
 # ---------------------------------------------------------
@@ -2569,7 +3034,7 @@ elif st.session_state.current_nav == "📄 Docs":
     - **Key Dimensions**: `CUSTOMER_ID`, `POLICY_ID`, `AGENT_ID`, `CLAIM_TYPE`, `STATE`, `PLAN_TIER`
     - **Measures**: `PREMIUM_AMOUNT`, `CLAIM_AMOUNT`, `DAYS_TO_RESOLVE`, `FRAUD_SCORE`, `CHURN_PROBABILITY`
     - **Loss Ratio Formula**: `LOSS_RATIO = CLAIM_AMOUNT / PREMIUM_AMOUNT`
-    - **Data Trust Score (DTS)**: Composite weighted pass rate across 50 enterprise DQ rules across 7 quality dimensions.
+    - **Data Quality**: Field completeness and row validity measured directly on `CORE.POLICIES`, `CORE.CLAIMS` and `CORE.CUSTOMERS`. Rule-based dimensions appear only when `UNIFIEDAI_SH.DQ_RULES` is populated.
     """)
 
 
@@ -2633,6 +3098,5 @@ elif st.session_state.current_nav == "⚙ Settings":
         "database": current_db,
         "schema": current_sh,
         "agent": current_agent,
-        "api_endpoint": API_BASE_URL,
         "persistent_connection": True
     })

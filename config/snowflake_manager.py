@@ -18,6 +18,21 @@ if PROJECT_ROOT not in sys.path:
 
 import snowflake.connector
 
+
+class SnowflakeQueryError(Exception):
+    """Raised by execute_query_checked when a statement fails.
+
+    execute_query deliberately keeps its historical (None, None) return contract so
+    the existing call sites are undisturbed; callers that need to tell a genuine
+    empty result apart from a failure use execute_query_checked or get_last_error.
+    """
+
+    def __init__(self, message: str, sql: Optional[str] = None):
+        super().__init__(message)
+        self.message = message
+        self.sql = sql
+
+
 class SnowflakeManager:
     """
     Thread-Safe Singleton Persistent Connection Manager for Snowflake.
@@ -52,6 +67,7 @@ class SnowflakeManager:
         self._lock = threading.RLock()
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._stop_heartbeat = threading.Event()
+        self._last_error: Optional[str] = None
         self._initialized = True
 
     def connect(self) -> bool:
@@ -79,7 +95,11 @@ class SnowflakeManager:
                 database = self.env.get("SNOWFLAKE_DB", "").strip()
                 schema = self.env.get("SNOWFLAKE_SH", "").strip()
                 role = self.env.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN").strip()
-                self._host = self.env.get("SNOWFLAKE_HOST_URL", f"{account}.snowflakecomputing.com").strip()
+                raw_host = self.env.get("SNOWFLAKE_HOST_URL", "").strip()
+                if raw_host and "." in raw_host and len(raw_host) > 5:
+                    self._host = raw_host
+                else:
+                    self._host = f"{account}.snowflakecomputing.com"
 
                 if not (account and user and password):
                     print("[SnowflakeManager] Warning: Credentials incomplete in .env")
@@ -189,42 +209,105 @@ class SnowflakeManager:
                 "host": self._host
             }
 
-    def execute_query(self, sql: str) -> Tuple[Optional[List[Dict[str, Any]]], Optional[List[str]]]:
+    def execute_query(
+        self,
+        sql: str,
+        params: Optional[Any] = None
+    ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[List[str]]]:
         """
         Executes a SQL query using the persistent connection with thread synchronization.
-        Returns JSON-safe rows and column names.
+        Returns JSON-safe rows and column names, or (None, None) on failure.
+
+        On failure the exception text is recorded and is retrievable via
+        get_last_error(), so a caller can distinguish "query failed" from
+        "query succeeded and returned no rows" (both of which look like a falsy
+        result otherwise). Use execute_query_checked when you want the error to
+        propagate instead.
+
+        params, when supplied, are bound by the connector rather than
+        interpolated into the statement text.
         """
         with self._lock:
             try:
-                conn = self.get_connection()
-                cur = conn.cursor()
-                cur.execute(sql)
-                
-                cols = [c[0] for c in cur.description] if cur.description else []
-                raw_rows = cur.fetchall()
-                cur.close()
-
-                records = []
-                for r in raw_rows:
-                    row_dict = {}
-                    for col_name, val in zip(cols, r):
-                        if val is None:
-                            row_dict[col_name] = None
-                        elif hasattr(val, 'isoformat'):
-                            row_dict[col_name] = val.isoformat()
-                        elif isinstance(val, (int, float, str, bool)):
-                            row_dict[col_name] = val
-                        else:
-                            try:
-                                row_dict[col_name] = float(val)
-                            except Exception:
-                                row_dict[col_name] = str(val)
-                    records.append(row_dict)
+                records, cols = self._execute(sql, params)
+                self._last_error = None
                 return records, cols
-
             except Exception as e:
+                self._last_error = str(e)
                 print(f"[SnowflakeManager] Query execution error: {e}")
                 return None, None
+
+    def execute_query_checked(
+        self,
+        sql: str,
+        params: Optional[Any] = None
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """
+        Same as execute_query but raises SnowflakeQueryError on failure.
+
+        Use this wherever a silent failure would be misreported to the user, for
+        example DDL that must exist before an insert, or a search index refresh
+        whose failure means freshly ingested rows are not yet retrievable.
+        """
+        with self._lock:
+            try:
+                records, cols = self._execute(sql, params)
+                self._last_error = None
+                return records, cols
+            except SnowflakeQueryError:
+                raise
+            except Exception as e:
+                self._last_error = str(e)
+                print(f"[SnowflakeManager] Query execution error: {e}")
+                raise SnowflakeQueryError(str(e), sql=sql) from e
+
+    def get_last_error(self) -> Optional[str]:
+        """Returns the error text from the most recent failed statement, if any."""
+        with self._lock:
+            return self._last_error
+
+    def _execute(
+        self,
+        sql: str,
+        params: Optional[Any] = None
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Runs one statement and normalises the result into JSON-safe rows.
+
+        Caller is expected to already hold self._lock.
+        """
+        conn = self.get_connection()
+        cur = conn.cursor()
+        try:
+            if params is not None:
+                cur.execute(sql, params)
+            else:
+                cur.execute(sql)
+
+            cols = [c[0] for c in cur.description] if cur.description else []
+            raw_rows = cur.fetchall()
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
+
+        records = []
+        for r in raw_rows:
+            row_dict = {}
+            for col_name, val in zip(cols, r):
+                if val is None:
+                    row_dict[col_name] = None
+                elif hasattr(val, 'isoformat'):
+                    row_dict[col_name] = val.isoformat()
+                elif isinstance(val, (int, float, str, bool)):
+                    row_dict[col_name] = val
+                else:
+                    try:
+                        row_dict[col_name] = float(val)
+                    except Exception:
+                        row_dict[col_name] = str(val)
+            records.append(row_dict)
+        return records, cols
 
     def _start_heartbeat(self):
         """Starts a background daemon thread that periodically pings Snowflake to keep session alive."""
