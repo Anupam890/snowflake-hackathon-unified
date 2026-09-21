@@ -43,10 +43,14 @@ from config.snowflake_manager import get_st_cached_snowflake_manager
 import services.backend_service as backend_service
 from app.lib.agent_client import call_cortex_agent, fetch_snowflake_status
 from app.lib.render import extract_uploaded_file_content, render_assistant_response
+from app.lib.toasts import flush_toasts, queue_toast, toast_now
 from styles.style_loader import inject_custom_css
 
 # Inject global enterprise stylesheet
 inject_custom_css()
+
+# Emit anything a previous run queued just before calling st.rerun().
+flush_toasts()
 
 # Grab cached Snowflake manager
 cached_sf_mgr = get_st_cached_snowflake_manager()
@@ -182,10 +186,10 @@ with st.sidebar:
 
     st.divider()
 
-    # 3. Cortex Model Configuration
-    st.markdown('<div class="sidebar-section-header">CORTEX LLM ENGINE</div>', unsafe_allow_html=True)
+    # 3. Model selection
+    st.markdown('<div class="sidebar-section-header">INSIGHT AI ENGINE</div>', unsafe_allow_html=True)
     selected_model = st.selectbox(
-        "Cortex Foundation Model",
+        "Model",
         ["claude-3-5-sonnet", "mistral-large2", "snowflake-arctic", "llama3.1-70b"],
         index=0,
         label_visibility="collapsed"
@@ -259,7 +263,7 @@ with col_head_attach:
                 raw_bytes = agent_up.read()
 
                 try:
-                    with st.spinner("❄️ Uploading to Snowflake Stage (@DOC_STAGE) & generating Cortex Embeddings..."):
+                    with st.spinner("❄️ Uploading and indexing the document..."):
                         ingest_res = backend_service.upload_and_ingest_pipeline(
                             file_bytes=raw_bytes,
                             file_name=agent_up.name,

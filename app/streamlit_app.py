@@ -34,12 +34,16 @@ from config.snowflake_manager import get_st_cached_snowflake_manager
 import services.backend_service as backend_service
 from app.lib.agent_client import call_cortex_agent, fetch_snowflake_status
 from app.lib.render import extract_uploaded_file_content, render_assistant_response
+from app.lib.toasts import flush_toasts, queue_toast, toast_now
 
 # Load environment configuration
 env_config = {k.strip(): v.strip() for k, v in dotenv_values(os.path.join(PROJECT_ROOT, '.env')).items()}
 
 # Get persistent cached Snowflake manager (reused across all reruns, avoiding Duo prompts)
 cached_sf_mgr = get_st_cached_snowflake_manager()
+
+# Emit anything a previous run queued just before calling st.rerun().
+flush_toasts()
 
 # Premium Custom CSS Design System
 st.markdown("""
@@ -999,10 +1003,20 @@ def fetch_plan_ratings_summary():
 
 
 @st.cache_data(ttl=30)
-def fetch_customer_directory(search: Optional[str] = None, state: Optional[str] = None, limit: int = 200):
+def fetch_customer_directory(search: Optional[str] = None, state: Optional[str] = None,
+                            plan: Optional[str] = None, status: Optional[str] = None,
+                            limit: int = 200):
     return backend_service.get_customer_directory(
-        mgr=cached_sf_mgr, search=search, state=state, limit=limit
+        mgr=cached_sf_mgr, search=search, state=state,
+        plan=plan, status=status, limit=limit
     )
+
+
+# Filter options change only when the policy mix does, so this is cached far longer
+# than the directory rows themselves.
+@st.cache_data(ttl=600)
+def fetch_plan_filter_options():
+    return backend_service.get_customer_plan_filter_options(mgr=cached_sf_mgr)
 
 
 @st.cache_data(ttl=30)
@@ -1015,19 +1029,13 @@ def fetch_customer_360(customer_id: str):
     return backend_service.get_customer_360(customer_id=customer_id, mgr=cached_sf_mgr)
 
 
-@st.cache_data(ttl=60)
-def fetch_agent_telemetry(days: int = 30, user_name: str = None):
-    return backend_service.get_agent_telemetry(
-        mgr=cached_sf_mgr, user_name=user_name, days=days
-    )
-
-
 def clear_rating_caches():
     """Drop the caches a rating or match write invalidates."""
     fetch_plan_ratings_summary.clear()
     fetch_customer_directory.clear()
     fetch_customer_matches.clear()
     fetch_customer_360.clear()
+    fetch_plan_filter_options.clear()
 
 
 
@@ -1180,12 +1188,25 @@ with st.sidebar:
     auto_run_sql = True
 
     # 3. Global Timeframe Filter
+    # Options reflect the actual span of CORE data (policies 2024-09 to 2026-08, claims
+    # 2025-09 to 2026-09) against a current date of 2026. The previous default of
+    # "FY2024 YTD" named a year the data has largely moved past.
     st.markdown('<div class="sidebar-section-header">TIMEFRAME SCOPE</div>', unsafe_allow_html=True)
     time_filter = st.selectbox(
         "Timeframe Filter",
-        ["FY2024 YTD", "Last 90 Days", "Last 30 Days", "All Time Historical"],
+        ["All Time Historical", "FY2026 YTD", "FY2026 Q3", "Last 90 Days",
+         "Last 30 Days", "FY2025 Full Year"],
         index=0,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        help=(
+            "Reference label only — dashboard queries are not yet scoped by date, so "
+            "every view currently reads the full history."
+        ),
+    )
+    st.caption(
+        f"<span style='font-size:0.68rem; color:#64748B;'>Label only · "
+        f"{html.escape(time_filter)}</span>",
+        unsafe_allow_html=True,
     )
 
     # Quick Actions & User Footer
@@ -1197,6 +1218,7 @@ with st.sidebar:
         st.session_state.uploaded_doc_text = None
         st.session_state.uploaded_doc_snowflake = None
         st.session_state.doc_uploader_seq += 1
+        queue_toast("Chat cleared", "deleted")
         st.rerun()
 
     st.markdown(f"""
@@ -1952,7 +1974,7 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
                         <div class="chatgpt-file-name">{st.session_state.uploaded_doc_name}</div>
                         <div class="chatgpt-file-meta">{st.session_state.uploaded_doc_summary or 'Document context attached'}</div>
                         <div style="color: #34D399; font-size: 0.72rem; font-weight: 600; margin-top: 2px;">
-                            ❄️ Synced to Snowflake @DOC_STAGE • {chunks_count} chunks indexed in DOCUMENT_CHUNKS with Cortex Embeddings
+                            ✅ Indexed • {chunks_count} searchable sections
                         </div>
                     </div>
                 </div>
@@ -1985,7 +2007,7 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
                     raw_bytes = agent_up.read()
 
                     try:
-                        with st.spinner("❄️ Uploading to Snowflake Stage (@DOC_STAGE) & generating Cortex Embeddings..."):
+                        with st.spinner("❄️ Uploading and indexing the document..."):
                             ingest_res = backend_service.upload_and_ingest_pipeline(
                                 file_bytes=raw_bytes,
                                 file_name=agent_up.name,
@@ -2000,6 +2022,22 @@ elif st.session_state.current_nav in ["◉ Enterprise AI", "Enterprise AI", "◉
                     st.session_state.uploaded_doc_summary = summary
                     st.session_state.uploaded_doc_text = content
                     st.session_state.uploaded_doc_snowflake = ingest_res
+                    # Report what actually happened rather than a blanket success:
+                    # the pipeline can partially index a large document.
+                    _st = ingest_res.get("status")
+                    _chunks = ingest_res.get("chunks_count") or 0
+                    if _st == "success" and not ingest_res.get("truncated"):
+                        queue_toast(f"Document indexed — {_chunks} sections", "doc")
+                    elif _st == "success":
+                        queue_toast(
+                            f"Document partially indexed — {_chunks} of "
+                            f"{ingest_res.get('total_chunks', '?')} sections", "warning"
+                        )
+                    else:
+                        queue_toast(
+                            f"Document not indexed: {ingest_res.get('message', 'unknown error')}",
+                            "error"
+                        )
                     st.rerun()
     
     # Render Conversation History
@@ -2220,7 +2258,7 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                 "RatePlan tool uses."
             )
 
-            f_search, f_state, f_limit = st.columns([4, 2, 2])
+            f_search, f_state, f_plan, f_status, f_limit = st.columns([3.2, 1.5, 2, 1.8, 1.2])
             with f_search:
                 cust_search = st.text_input(
                     "Search by name, ID or email", value="", key="exp_cust_search",
@@ -2229,12 +2267,33 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
             with f_state:
                 state_opts = ["All", "TX", "CA", "PA", "IL", "AZ", "NY", "GA"]
                 cust_state = st.selectbox("State", state_opts, key="exp_cust_state")
+            with f_plan:
+                # Options come from the data rather than a hardcoded list, so they stay
+                # correct if the policy mix changes.
+                plan_opts = ["All plans"] + fetch_plan_filter_options().get("plan_names", [])
+                cust_plan = st.selectbox(
+                    "Plan held", plan_opts, key="exp_cust_plan",
+                    help="Policy type and tier the customer holds, from CORE.POLICIES",
+                )
+            with f_status:
+                status_labels = {
+                    "All": "All",
+                    "ACTIVE": "Active only",
+                    "INACTIVE": "No active policy",
+                }
+                cust_status = st.selectbox(
+                    "Status", list(status_labels.keys()),
+                    format_func=lambda s: status_labels[s], key="exp_cust_status",
+                    help="Active means the customer holds at least one policy with POLICY_STATUS = 'Active'",
+                )
             with f_limit:
                 cust_limit = st.selectbox("Rows", [50, 100, 200, 500], index=2, key="exp_cust_limit")
 
             directory = fetch_customer_directory(
                 search=cust_search or None,
                 state=None if cust_state == "All" else cust_state,
+                plan=None if cust_plan == "All plans" else cust_plan,
+                status=cust_status,
                 limit=int(cust_limit),
             )
 
@@ -2242,7 +2301,11 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                 st.info("No customers match the current filters.")
             else:
                 df_dir = pd.DataFrame(directory)
-                st.caption(f"Showing **{len(df_dir):,}** customers")
+                active_n = int((df_dir["ACTIVE_POLICY_COUNT"] > 0).sum())
+                st.caption(
+                    f"Showing **{len(df_dir):,}** customers — {active_n:,} with an active policy, "
+                    f"{len(df_dir) - active_n:,} without"
+                )
                 st.dataframe(
                     df_dir,
                     use_container_width=True,
@@ -2251,6 +2314,9 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                     column_config={
                         "CUSTOMER_ID": st.column_config.TextColumn("Customer ID", width="small"),
                         "CUSTOMER_NAME": st.column_config.TextColumn("Name", width="medium"),
+                        "CUSTOMER_STATUS": st.column_config.TextColumn("Status", width="small"),
+                        "PLANS_HELD": st.column_config.TextColumn("Plans Held", width="medium"),
+                        "ACTIVE_POLICY_COUNT": st.column_config.NumberColumn("Active", width="small"),
                         "AGE": st.column_config.NumberColumn("Age", width="small"),
                         "ANNUAL_INCOME": st.column_config.NumberColumn("Income", format="$%.0f"),
                         "CREDIT_SCORE": st.column_config.NumberColumn("Credit", width="small"),
@@ -2426,37 +2492,93 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                         "ship with matches; generating them calls Cortex, so it runs on request."
                     )
                     if st.button("⚙ Generate Matches", key="exp_gen_matches", type="primary"):
-                        with st.spinner("Running SP_PRODUCT_MATCH_AND_SAVE via Snowflake Cortex..."):
+                        with st.spinner("Matching products with INSIGHT AI..."):
                             gen = backend_service.generate_customer_matches(
                                 customer_id=sel_customer, mgr=cached_sf_mgr
                             )
                         if gen.get("status") == "success":
                             clear_rating_caches()
-                            st.success("Matches generated.")
+                            # Queued, not shown inline: the st.rerun() below discards anything
+                            # emitted here, which is why the old st.success was never seen.
+                            queue_toast("Product matches generated", "success")
                             st.rerun()
                         else:
                             st.error(f"❌ Match generation failed: {gen.get('message')}")
+                            toast_now("Match generation failed", "error")
                 else:
                     df_m = pd.DataFrame(matches)
+                    # Plan economics and benefits instead of STRATEGY_SCORES: the raw
+                    # per-strategy weights explain how the ranking was produced but say
+                    # nothing about the plan, which is what matters when choosing or
+                    # rating one.
                     st.dataframe(
-                        df_m[["MATCH_RANK", "PRODUCT_ID", "PRODUCT_NAME", "CATEGORY",
-                              "PLAN_TIER", "OVERALL_SCORE", "STRATEGY_SCORES"]],
+                        df_m[["MATCH_RANK", "PRODUCT_NAME", "CATEGORY", "PLAN_TIER",
+                              "MONTHLY_PREMIUM", "ANNUAL_PREMIUM", "COVERAGE_LIMIT",
+                              "KEY_FEATURES", "OVERALL_SCORE"]],
                         use_container_width=True,
                         hide_index=True,
                         column_config={
                             "MATCH_RANK": st.column_config.NumberColumn("Rank", width="small"),
+                            "PRODUCT_NAME": st.column_config.TextColumn("Plan", width="medium"),
+                            "CATEGORY": st.column_config.TextColumn("Category", width="small"),
+                            "PLAN_TIER": st.column_config.TextColumn("Tier", width="small"),
+                            "MONTHLY_PREMIUM": st.column_config.NumberColumn("Premium / mo", format="$%.2f"),
+                            "ANNUAL_PREMIUM": st.column_config.NumberColumn("Premium / yr", format="$%.2f"),
+                            "COVERAGE_LIMIT": st.column_config.NumberColumn("Coverage", format="$%.0f"),
+                            "KEY_FEATURES": st.column_config.TextColumn("Benefits", width="large"),
                             "OVERALL_SCORE": st.column_config.ProgressColumn(
                                 "Match Score", min_value=0.0, max_value=100.0, format="%.1f"
                             ),
-                            "STRATEGY_SCORES": st.column_config.TextColumn("Strategy Scores", width="medium"),
                         },
                     )
 
-                    rate_label = {
-                        m["PRODUCT_ID"]: f"#{m['MATCH_RANK']} {m['PRODUCT_NAME']} "
-                                         f"({m['CATEGORY']}/{m['PLAN_TIER']})"
-                        for m in matches
-                    }
+                    with st.expander("📄 Plan Detail — eligibility, benefits & match reasoning"):
+                        for mrow in matches:
+                            fam = mrow.get("FAMILY_FRIENDLY")
+                            premium = mrow.get("MONTHLY_PREMIUM")
+                            coverage = mrow.get("COVERAGE_LIMIT")
+                            st.markdown(
+                                f"**#{mrow.get('MATCH_RANK')} · {mrow.get('PRODUCT_NAME')}** "
+                                f"`{mrow.get('PRODUCT_ID')}` — "
+                                f"{mrow.get('CATEGORY')} / {mrow.get('PLAN_TIER')}"
+                            )
+                            d1, d2, d3, d4 = st.columns(4)
+                            d1.metric("Monthly Premium",
+                                      f"${float(premium):,.2f}" if premium is not None else "Not listed")
+                            d2.metric("Coverage Limit",
+                                      f"${float(coverage):,.0f}" if coverage is not None else "Not listed")
+                            d3.metric("Eligible Age",
+                                      f"{mrow.get('MIN_AGE')}–{mrow.get('MAX_AGE')}"
+                                      if mrow.get("MIN_AGE") is not None else "Not listed")
+                            d4.metric("Min Income",
+                                      f"${float(mrow['MIN_INCOME']):,.0f}"
+                                      if mrow.get("MIN_INCOME") is not None else "Not listed")
+
+                            feats = str(mrow.get("KEY_FEATURES") or "").strip()
+                            if feats:
+                                st.markdown("**Benefits**")
+                                for f in [x.strip() for x in feats.split(",") if x.strip()]:
+                                    st.markdown(f"- {f}")
+                            else:
+                                st.caption("No benefits recorded in PRODUCT_CATALOG for this plan.")
+
+                            st.caption(
+                                f"**Eligibility:** {mrow.get('ELIGIBILITY_CRITERIA') or 'Not specified'}  \n"
+                                f"**Risk profile:** {mrow.get('RISK_LEVEL_MATCH') or '—'} &nbsp;·&nbsp; "
+                                f"**Family friendly:** "
+                                + ("Yes" if fam is True else ("No" if fam is False else "Not specified"))
+                            )
+                            if mrow.get("AI_REASONING"):
+                                st.caption(f"**Why this matched:** {mrow['AI_REASONING']}")
+                            st.divider()
+
+                    def _plan_opt_label(m):
+                        prem = m.get("MONTHLY_PREMIUM")
+                        money = f" — ${float(prem):,.2f}/mo" if prem is not None else ""
+                        return (f"#{m['MATCH_RANK']} {m['PRODUCT_NAME']} "
+                                f"({m['CATEGORY']}/{m['PLAN_TIER']}){money}")
+
+                    rate_label = {m["PRODUCT_ID"]: _plan_opt_label(m) for m in matches}
                     r_col1, r_col2 = st.columns([5, 2])
                     with r_col1:
                         sel_product = st.selectbox(
@@ -2504,6 +2626,11 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                                 if res.get("status") == "success":
                                     out = res.get("result", {})
                                     clear_rating_caches()
+                                    toast_now(
+                                        f"{value:.1f}★ recorded — average now "
+                                        f"{out.get('new_avg_rating', '—')}",
+                                        "success",
+                                    )
                                     st.success(
                                         f"✅ Recorded **{value:.1f}★** as `{out.get('rating_id', '—')}`. "
                                         f"Average moved {out.get('old_avg_rating', '—')} → "
@@ -2513,6 +2640,7 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                                     st.button("Close", key="exp_rating_close")
                                 else:
                                     st.error(f"❌ {res.get('message')}")
+                                    toast_now("Rating could not be saved", "error")
 
                     if open_dialog:
                         _rating_dialog(sel_customer, sel_product, rate_label.get(sel_product, sel_product))
@@ -2563,9 +2691,7 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
     # GROUP 3: STRATEGY & MARKET
     # ------------------------------------------------------------------
     else:
-        strat_tab, market_tab, telemetry_tab = st.tabs(
-            ["💡 Strategic Recommendations", "📈 Market & Pricing", "🛰️ Agent Telemetry"]
-        )
+        strat_tab, market_tab = st.tabs(["💡 Strategic Recommendations", "📈 Market & Pricing"])
 
         with strat_tab:
             recs = fetch_strategic_recommendations()
@@ -2585,14 +2711,15 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                 with head_r:
                     st.markdown("<div style='height: 26px;'></div>", unsafe_allow_html=True)
                     if st.button("🔄 Regenerate", key="exp_regen_recs", use_container_width=True):
-                        with st.spinner("Running SP_GENERATE_RECOMMENDATIONS via Cortex..."):
+                        with st.spinner("Generating recommendations with INSIGHT AI..."):
                             out = backend_service.regenerate_strategic_recommendations(mgr=cached_sf_mgr)
                         if out.get("status") == "success":
                             fetch_strategic_recommendations.clear()
-                            st.success("Recommendations regenerated.")
+                            queue_toast("Strategic recommendations regenerated", "success")
                             st.rerun()
                         else:
                             st.error(f"❌ Regeneration failed: {out.get('message')}")
+                            toast_now("Regeneration failed", "error")
 
                 pc = recs["priority_counts"]
                 k1, k2, k3 = st.columns(3)
@@ -2728,27 +2855,144 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                     "background": "transparent",
                 }
                 st.vega_lite_chart(df_cmp, scatter_spec, use_container_width=True, height=330)
-                st.caption("Points above the diagonal are priced above the market; hover for full detail.")
 
                 st.markdown("##### Price Positioning Detail")
-                st.dataframe(
-                    df_cmp[["CATEGORY", "PLAN_TIER", "OUR_PRODUCT", "OUR_PREMIUM",
-                            "COMP_AVG_PREMIUM", "PRICE_DIFF_PCT", "OUR_RATING",
-                            "COMP_AVG_RATING", "COMPETITOR_COUNT", "NEW_ENTRANTS",
-                            "EXITING", "PRICE_POSITION"]],
-                    use_container_width=True,
-                    hide_index=True,
-                    height=300,
-                    column_config={
-                        "OUR_PREMIUM": st.column_config.NumberColumn("Our Premium", format="$%.2f"),
-                        "COMP_AVG_PREMIUM": st.column_config.NumberColumn("Comp Avg", format="$%.2f"),
-                        "PRICE_DIFF_PCT": st.column_config.NumberColumn("Diff %", format="%.2f%%"),
-                        "OUR_RATING": st.column_config.NumberColumn("Our ★", format="%.1f"),
-                        "COMP_AVG_RATING": st.column_config.NumberColumn("Comp ★", format="%.1f"),
-                    },
-                )
 
-                with st.expander("🏢 Competitor Product Detail", expanded=False):
+                pp_cols = [
+                    "CATEGORY", "PLAN_TIER", "OUR_PRODUCT", "INDICATED_ACTION",
+                    "OUR_PREMIUM", "COMP_AVG_PREMIUM", "PRICE_GAP_MONTHLY", "PRICE_DIFF_PCT",
+                    "SUGGESTED_LOW", "SUGGESTED_HIGH",
+                    "COVERAGE_ADVANTAGE_PCT", "FEATURE_GAP", "RATING_EDGE",
+                    "COMPETITIVE_PRESSURE", "POLICIES_IN_FORCE",
+                    "ANNUAL_REVENUE_EXPOSED", "ANNUAL_REVENUE_DELTA_IF_REPRICED",
+                    "AVG_LOSS_RATIO_PCT", "PRICE_POSITION",
+                ]
+                # One config for every column, shared across the sub-tabs so a field is
+                # formatted identically wherever it appears.
+                PP_CONFIG = {
+                    "CATEGORY": st.column_config.TextColumn("Category", width="small"),
+                    "PLAN_TIER": st.column_config.TextColumn("Tier", width="small"),
+                    "OUR_PRODUCT": st.column_config.TextColumn("Plan", width="medium"),
+                    "INDICATED_ACTION": st.column_config.TextColumn("Indicated Action", width="small"),
+                    "PRICE_POSITION": st.column_config.TextColumn("Position", width="small"),
+
+                    "OUR_PREMIUM": st.column_config.NumberColumn("Our Premium", format="$%.2f"),
+                    "COMP_AVG_PREMIUM": st.column_config.NumberColumn("Comp Avg", format="$%.2f"),
+                    "PRICE_GAP_MONTHLY": st.column_config.NumberColumn("Gap $/mo", format="$%.2f"),
+                    "PRICE_DIFF_PCT": st.column_config.NumberColumn("Diff %", format="%.2f%%"),
+                    "SUGGESTED_LOW": st.column_config.NumberColumn("Suggest Low", format="$%.2f"),
+                    "SUGGESTED_HIGH": st.column_config.NumberColumn("Suggest High", format="$%.2f"),
+
+                    "OUR_COVERAGE": st.column_config.NumberColumn("Our Coverage", format="$%.0f"),
+                    "COMP_AVG_COVERAGE": st.column_config.NumberColumn("Comp Avg Coverage", format="$%.0f"),
+                    "COVERAGE_ADVANTAGE_PCT": st.column_config.NumberColumn(
+                        "Coverage Adv %", format="%.1f%%",
+                        help="How much more coverage we give than the market average"),
+                    "COVERAGE_PER_DOLLAR": st.column_config.NumberColumn(
+                        "Our Cover / $", format="%.0f",
+                        help="Coverage bought per dollar of monthly premium"),
+                    "MARKET_COVERAGE_PER_DOLLAR": st.column_config.NumberColumn(
+                        "Market Cover / $", format="%.0f",
+                        help="Competitor average coverage per dollar of premium"),
+
+                    "OUR_FEATURES": st.column_config.NumberColumn("Our Features", width="small"),
+                    "COMP_AVG_FEATURES": st.column_config.NumberColumn("Comp Avg Features", format="%.1f"),
+                    "FEATURE_GAP": st.column_config.NumberColumn(
+                        "Feature Gap", format="%.1f",
+                        help="Our feature count minus the competitor average"),
+
+                    "OUR_RATING": st.column_config.NumberColumn("Our ★", format="%.1f"),
+                    "COMP_AVG_RATING": st.column_config.NumberColumn("Comp ★", format="%.1f"),
+                    "RATING_EDGE": st.column_config.NumberColumn(
+                        "★ Edge", format="%.2f",
+                        help="Our rating minus the competitor average"),
+
+                    "COMPETITOR_COUNT": st.column_config.NumberColumn("Competitors", width="small"),
+                    "NEW_ENTRANTS": st.column_config.NumberColumn("Entering", width="small"),
+                    "EXITING": st.column_config.NumberColumn("Exiting", width="small"),
+                    "NET_ENTRANTS": st.column_config.NumberColumn(
+                        "Net", width="small", help="Entering minus exiting"),
+                    "COMPETITIVE_PRESSURE": st.column_config.TextColumn("Pressure", width="small"),
+                    "MARKET_SHARE_CONTESTED": st.column_config.NumberColumn(
+                        "Share Contested %", format="%.1f%%",
+                        help="Combined market share of competitors in this category and tier"),
+                    "CHEAPEST_COMP_PREMIUM": st.column_config.NumberColumn("Cheapest Comp", format="$%.2f"),
+                    "DEAREST_COMP_PREMIUM": st.column_config.NumberColumn("Dearest Comp", format="$%.2f"),
+
+                    "POLICIES_IN_FORCE": st.column_config.NumberColumn("In Force", width="small"),
+                    "ACTIVE_POLICIES": st.column_config.NumberColumn("Active", width="small"),
+                    "AVG_LOSS_RATIO_PCT": st.column_config.NumberColumn("Loss Ratio %", format="%.1f%%"),
+                    "ANNUAL_REVENUE_EXPOSED": st.column_config.NumberColumn(
+                        "Revenue Exposed", format="$%.0f"),
+                    "ANNUAL_REVENUE_DELTA_IF_REPRICED": st.column_config.NumberColumn(
+                        "Δ If Repriced", format="$%.0f",
+                        help="Annual revenue change if moved to the suggested price"),
+                }
+
+                # Category/tier/plan repeat in every group as row anchors. Between them the
+                # four groups cover all 34 returned columns.
+                ANCHOR = ["CATEGORY", "PLAN_TIER", "OUR_PRODUCT"]
+                PP_GROUPS = [
+                    ("💵 Pricing", ANCHOR + [
+                        "INDICATED_ACTION", "OUR_PREMIUM", "COMP_AVG_PREMIUM",
+                        "PRICE_GAP_MONTHLY", "PRICE_DIFF_PCT",
+                        "SUGGESTED_LOW", "SUGGESTED_HIGH", "PRICE_POSITION",
+                    ]),
+                    ("🎁 Value & Features", ANCHOR + [
+                        "OUR_PREMIUM", "OUR_COVERAGE", "COMP_AVG_COVERAGE",
+                        "COVERAGE_ADVANTAGE_PCT", "COVERAGE_PER_DOLLAR",
+                        "MARKET_COVERAGE_PER_DOLLAR",
+                        "OUR_FEATURES", "COMP_AVG_FEATURES", "FEATURE_GAP",
+                        "OUR_RATING", "COMP_AVG_RATING", "RATING_EDGE",
+                    ]),
+                    ("⚔ Competition", ANCHOR + [
+                        "OUR_PREMIUM", "COMP_AVG_PREMIUM",
+                        "COMPETITOR_COUNT", "NEW_ENTRANTS", "EXITING", "NET_ENTRANTS",
+                        "COMPETITIVE_PRESSURE", "MARKET_SHARE_CONTESTED",
+                        "CHEAPEST_COMP_PREMIUM", "DEAREST_COMP_PREMIUM",
+                    ]),
+                    ("💰 Revenue Impact", ANCHOR + [
+                        "INDICATED_ACTION", "POLICIES_IN_FORCE", "ACTIVE_POLICIES",
+                        "OUR_PREMIUM", "AVG_LOSS_RATIO_PCT",
+                        "ANNUAL_REVENUE_EXPOSED", "ANNUAL_REVENUE_DELTA_IF_REPRICED",
+                    ]),
+                ]
+
+                pp_tabs = st.tabs([g[0] for g in PP_GROUPS])
+                for pp_tab, (_, group_cols) in zip(pp_tabs, PP_GROUPS):
+                    with pp_tab:
+                        shown = [c for c in group_cols if c in df_cmp.columns]
+                        st.dataframe(
+                            df_cmp[shown],
+                            use_container_width=True,
+                            hide_index=True,
+                            height=320,
+                            column_config={k: v for k, v in PP_CONFIG.items() if k in shown},
+                        )
+
+                missing_cols = sorted(
+                    set(df_cmp.columns) - {c for _, g in PP_GROUPS for c in g}
+                )
+                if missing_cols:
+                    st.caption(
+                        "Columns returned but not shown in any group: "
+                        + ", ".join(f"`{c}`" for c in missing_cols)
+                    )
+
+                no_book = int(len(df_cmp) - market.get("products_with_book", 0))
+                if no_book:
+                    st.caption(
+                        f"⚠️ {no_book} of {len(df_cmp)} catalogue products have **no in-force "
+                        "policies**, so repricing them moves no current revenue. "
+                        "`In Force` and `Revenue Exposed` read 0 for those rows rather than "
+                        "being hidden — a repricing recommendation on a product nobody holds "
+                        "is a market-entry decision, not a pricing one."
+                    )
+                with st.expander("🏢 Competitor Product Detail", expanded=True):
+                    st.caption(
+                        f"All {len(market['competitors'])} competitor products from "
+                        "`COMPETITOR_PRICING`, filterable by category."
+                    )
                     df_comp = pd.DataFrame(market["competitors"])
                     cat_opts = ["All"] + sorted(df_comp["CATEGORY"].dropna().unique().tolist())
                     pick_cat = st.selectbox("Category", cat_opts, key="exp_comp_cat")
@@ -2767,169 +3011,126 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                         },
                     )
 
-        with telemetry_tab:
-            st.markdown("### Agent Telemetry")
-            st.caption(
-                "Measured from the telemetry columns on `UNIFIEDAI_SH.CHAT_HISTORY`. "
-                "Latency is wall-clock time for the agent call, recorded per turn."
-            )
 
-            tel_c1, tel_c2 = st.columns([1, 1])
-            with tel_c1:
-                tel_window = st.selectbox(
-                    "Window", options=[7, 30, 90, 365],
-                    format_func=lambda d: f"Last {d} days",
-                    index=1, key="exp_tel_window",
-                )
-            with tel_c2:
-                tel_scope = st.selectbox(
-                    "Scope", options=["All users", current_user],
-                    index=0, key="exp_tel_scope",
-                )
-
-            tel = fetch_agent_telemetry(
-                days=tel_window,
-                user_name=None if tel_scope == "All users" else current_user,
-            )
-
-            if tel.get("status") != "success":
-                st.error(f"❌ Could not load telemetry: {tel.get('message')}")
-            elif tel["turns"] == 0:
-                st.info(
-                    f"No assistant turns recorded in the last {tel['window_days']} days"
-                    + ("" if tel_scope == "All users" else f" for {current_user}")
-                    + ". Ask the agent a question on the Enterprise AI page to populate this."
-                )
-            else:
-                def _ms(val):
-                    """Seconds when the value is large enough to warrant it, else ms."""
-                    if val is None:
-                        return "Not recorded"
-                    v = float(val)
-                    return f"{v / 1000:.1f}s" if v >= 1000 else f"{v:.0f}ms"
-
-                t1, t2, t3, t4, t5 = st.columns(5)
-                t1.metric("Agent Turns", f"{tel['turns']:,}",
-                          f"{tel['sessions']} session(s)", delta_color="off")
-                t2.metric("Median Latency", _ms(tel["p50_latency_ms"]))
-                t3.metric("P95 Latency", _ms(tel["p95_latency_ms"]),
-                          help="95th percentile - the slow tail users actually notice")
-                t4.metric("Slowest Turn", _ms(tel["max_latency_ms"]))
-                t5.metric("Error Rate",
-                          f"{tel['error_rate_pct']:.1f}%" if tel["error_rate_pct"] is not None else "n/a",
-                          f"{tel['errors']} error(s)" if tel["errors"] else "no errors",
-                          delta_color="inverse" if tel["errors"] else "off")
-
+                # ---- 8-factor engine, on demand ----
+                st.markdown("##### 🎯 8-Factor Price Optimization")
                 st.caption(
-                    f"🧠 **{tel['turns_with_sql']}** turn(s) generated SQL &nbsp;·&nbsp; "
-                    f"📎 **{tel['turns_with_doc']}** used an attached document &nbsp;·&nbsp; "
-                    f"👥 **{tel['users']}** user(s)"
+                    "Runs `SP_PRICE_OPTIMIZE` — the same procedure the agent's PriceOptimize "
+                    "tool calls, so this panel and the chat answer cannot disagree. One "
+                    "procedure call per product, so it runs on request."
                 )
 
-                # Turns written before the telemetry columns existed have no latency. They
-                # are called out rather than quietly averaged in as zero.
-                if tel["turns_without_telemetry"]:
-                    st.caption(
-                        f"ℹ️ {tel['turns_without_telemetry']} of {tel['turns']} turn(s) predate "
-                        "latency capture and are excluded from the latency figures above."
+                opt_labels = {
+                    f"{r['CATEGORY']}|{r['PLAN_TIER']}":
+                        f"{r['OUR_PRODUCT']} — {r['CATEGORY']}/{r['PLAN_TIER']} "
+                        f"(${float(r['OUR_PREMIUM']):,.2f}/mo, {r['INDICATED_ACTION']})"
+                    for r in market["comparison"]
+                }
+                o_c1, o_c2 = st.columns([5, 2])
+                with o_c1:
+                    sel_opt = st.selectbox(
+                        "Plan to optimize", options=list(opt_labels.keys()),
+                        format_func=lambda k: opt_labels[k], key="exp_opt_plan",
                     )
+                with o_c2:
+                    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                    run_opt = st.button("⚙ Run Optimization", key="exp_run_opt",
+                                        type="primary", use_container_width=True)
 
-                if tel["daily"]:
-                    st.markdown("##### Turns & Latency by Day")
-                    df_daily = pd.DataFrame(tel["daily"])
-                    for col in ("TURNS", "AVG_LATENCY_MS", "ERRORS"):
-                        df_daily[col] = pd.to_numeric(df_daily[col], errors="coerce")
-                    st.vega_lite_chart(
-                        df_daily,
-                        {
-                            "layer": [
-                                {
-                                    "mark": {"type": "bar", "opacity": 0.75},
-                                    "encoding": {
-                                        "y": {"field": "TURNS", "type": "quantitative",
-                                              "title": "Turns"},
-                                    },
-                                },
-                                {
-                                    "mark": {"type": "line", "point": True, "strokeWidth": 2},
-                                    "encoding": {
-                                        "y": {"field": "AVG_LATENCY_MS", "type": "quantitative",
-                                              "title": "Avg Latency (ms)"},
-                                    },
-                                },
-                            ],
-                            "encoding": {
-                                "x": {"field": "DAY", "type": "temporal", "title": None},
-                                "tooltip": [
-                                    {"field": "DAY", "type": "temporal", "title": "Day"},
-                                    {"field": "TURNS", "type": "quantitative", "title": "Turns"},
-                                    {"field": "AVG_LATENCY_MS", "type": "quantitative",
-                                     "title": "Avg Latency (ms)", "format": ",.0f"},
-                                    {"field": "ERRORS", "type": "quantitative", "title": "Errors"},
-                                ],
-                            },
-                            "resolve": {"scale": {"y": "independent"}},
-                            "view": {"stroke": None},
-                            "background": "transparent",
-                        },
-                        use_container_width=True, height=280,
-                    )
-
-                tel_left, tel_right = st.columns(2)
-                with tel_left:
-                    st.markdown("##### Tool Usage")
-                    if tel["by_tool"]:
-                        st.dataframe(
-                            pd.DataFrame(tel["by_tool"]), width="stretch", hide_index=True,
-                            column_config={
-                                "TOOL": st.column_config.TextColumn("Tool"),
-                                "INVOCATIONS": st.column_config.NumberColumn("Turns Used"),
-                                "AVG_TURN_LATENCY_MS": st.column_config.NumberColumn(
-                                    "Avg Turn Latency (ms)", format="%.0f"),
-                            },
+                if run_opt:
+                    o_cat, o_tier = sel_opt.split("|")
+                    with st.spinner(f"Running 8-factor engine for {o_cat}/{o_tier}..."):
+                        st.session_state.price_opt_result = backend_service.run_price_optimization(
+                            category=o_cat, plan_tier=o_tier, mgr=cached_sf_mgr
+                        )
+                    # No rerun follows, so this is emitted immediately.
+                    _opt_res = st.session_state.price_opt_result or {}
+                    if _opt_res.get("status") == "success":
+                        toast_now(
+                            f"{o_cat}/{o_tier} scored "
+                            f"{_opt_res.get('overall_score')}/100",
+                            "chart",
                         )
                     else:
-                        st.info(
-                            "No tool names recorded yet. Tool capture starts with the next "
-                            "agent turn."
+                        toast_now("Optimization failed", "error")
+
+                opt = st.session_state.get("price_opt_result")
+                if opt and opt.get("status") != "success":
+                    st.error(f"❌ Optimization failed: {opt.get('message')}")
+                elif opt:
+                    prod = opt.get("our_product", {})
+                    rng = opt.get("suggested_price_range", {})
+                    mkt = opt.get("market_analysis", {})
+                    internal = opt.get("internal_metrics", {})
+                    score = opt.get("overall_score")
+                    rec = str(opt.get("recommendation") or "")
+
+                    band = ("#FB7185" if score is not None and score < 50
+                            else "#FBBF24" if score is not None and score < 70 else "#34D399")
+                    st.markdown(
+                        f"""
+                        <div style="background: rgba(15,23,42,0.75); border-left: 4px solid {band};
+                                    border-radius: 8px; padding: 12px 16px; margin-bottom: 12px;">
+                          <div style="color:#E2E8F0; font-weight:700; font-size:1.02rem;">
+                            {html.escape(str(prod.get('product_name') or ''))}
+                            <span style="color:#64748B; font-size:0.8rem;">
+                              {html.escape(str(prod.get('product_id') or ''))}</span>
+                          </div>
+                          <div style="color:{band}; font-weight:700; margin-top:4px;">
+                            {html.escape(rec)}
+                          </div>
+                          <div style="color:#94A3B8; font-size:0.78rem; margin-top:4px;">
+                            Overall score {score} / 100
+                          </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    g1, g2, g3, g4 = st.columns(4)
+                    g1.metric("Current Premium", f"${float(rng.get('current', 0)):,.2f}")
+                    g2.metric("Suggested Range",
+                              f"${float(rng.get('low', 0)):,.2f}–${float(rng.get('high', 0)):,.2f}")
+                    g3.metric("Market Average", f"${float(rng.get('market_avg', 0)):,.2f}",
+                              f"{mkt.get('price_diff_pct')}% vs market", delta_color="off")
+                    g4.metric("Retention Rate",
+                              f"{internal.get('retention_rate')}%" if internal.get("retention_rate") is not None else "n/a",
+                              f"Loss ratio {internal.get('loss_ratio')}%", delta_color="off")
+
+                    weakest = opt.get("weakest_factor")
+                    if weakest:
+                        st.markdown(
+                            f"**Largest drag:** {weakest['Factor']} "
+                            f"(score {weakest['Score']}, {weakest['Weight %']}% weight)"
                         )
 
-                with tel_right:
-                    st.markdown("##### By Engine")
-                    st.dataframe(
-                        pd.DataFrame(tel["by_engine"]), width="stretch", hide_index=True,
-                        column_config={
-                            "ENGINE": st.column_config.TextColumn("Engine"),
-                            "TURNS": st.column_config.NumberColumn("Turns"),
-                            "AVG_LATENCY_MS": st.column_config.NumberColumn(
-                                "Avg Latency (ms)", format="%.0f"),
-                            "ERRORS": st.column_config.NumberColumn("Errors"),
-                        },
-                    )
-                    st.markdown("##### By Model")
-                    st.dataframe(
-                        pd.DataFrame(tel["by_model"]), width="stretch", hide_index=True,
-                        column_config={
-                            "MODEL": st.column_config.TextColumn("Model"),
-                            "TURNS": st.column_config.NumberColumn("Turns"),
-                            "AVG_LATENCY_MS": st.column_config.NumberColumn(
-                                "Avg (ms)", format="%.0f"),
-                            "MAX_LATENCY_MS": st.column_config.NumberColumn(
-                                "Max (ms)", format="%.0f"),
-                        },
-                    )
-
-                if tel["slowest_turns"]:
-                    with st.expander("🐢 Slowest Turns", expanded=False):
+                    f_left, f_right = st.columns([3, 4])
+                    with f_left:
+                        st.caption("Factor scores, weakest first")
                         st.dataframe(
-                            pd.DataFrame(tel["slowest_turns"]), width="stretch", hide_index=True,
+                            pd.DataFrame(opt.get("factors", [])),
+                            width="stretch", hide_index=True,
                             column_config={
-                                "LATENCY_MS": st.column_config.NumberColumn(
-                                    "Latency (ms)", format="%.0f"),
-                                "RESPONSE_PREVIEW": st.column_config.TextColumn(
-                                    "Response", width="large"),
+                                "Score": st.column_config.ProgressColumn(
+                                    "Score", min_value=0, max_value=100, format="%d"),
                             },
                         )
+                    with f_right:
+                        st.caption("Competitive landscape")
+                        comp_rows = opt.get("competitors", [])
+                        if comp_rows:
+                            df_land = pd.DataFrame(comp_rows)
+                            st.dataframe(
+                                df_land, width="stretch", hide_index=True,
+                                column_config={
+                                    "monthly_premium": st.column_config.NumberColumn("Premium", format="$%.2f"),
+                                    "coverage_limit": st.column_config.NumberColumn("Coverage", format="$%.0f"),
+                                    "rating": st.column_config.NumberColumn("★", format="%.1f"),
+                                    "market_share": st.column_config.NumberColumn("Share %", format="%.1f%%"),
+                                    "differentiator": st.column_config.TextColumn("Differentiator", width="medium"),
+                                },
+                            )
+                        else:
+                            st.info("No competitor rows returned for this category and tier.")
+
 
 
 # ---------------------------------------------------------
