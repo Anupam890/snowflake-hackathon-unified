@@ -1438,10 +1438,107 @@ def get_market_pricing(mgr: Optional[SnowflakeManager] = None) -> Dict[str, Any]
     manager, db, sh = _sh(mgr)
 
     comparison, _ = manager.execute_query(
-        f"SELECT CATEGORY, PLAN_TIER, OUR_PRODUCT, OUR_PREMIUM, COMP_AVG_PREMIUM, "
-        f"PRICE_DIFF_PCT, OUR_COVERAGE, COMP_AVG_COVERAGE, OUR_RATING, COMP_AVG_RATING, "
-        f"OUR_FEATURES, COMPETITOR_COUNT, NEW_ENTRANTS, EXITING, PRICE_POSITION "
-        f"FROM {db}.{sh}.V_PRICE_COMPARISON ORDER BY CATEGORY, PLAN_TIER"
+        f"""
+        WITH comp_extra AS (
+            -- V_PRICE_COMPARISON exposes OUR_FEATURES but not the competitor average,
+            -- so the feature gap cannot be computed from the view alone.
+            SELECT CATEGORY, PLAN_TIER,
+                   ROUND(AVG(NUM_KEY_FEATURES), 1) AS COMP_AVG_FEATURES,
+                   ROUND(SUM(MARKET_SHARE_PCT), 1) AS MARKET_SHARE_CONTESTED,
+                   MIN(MONTHLY_PREMIUM) AS CHEAPEST_COMP_PREMIUM,
+                   MAX(MONTHLY_PREMIUM) AS DEAREST_COMP_PREMIUM
+            FROM {db}.{sh}.COMPETITOR_PRICING
+            GROUP BY CATEGORY, PLAN_TIER
+        ),
+        in_force AS (
+            -- Catalogue CATEGORY/PLAN_TIER are upper case; POLICIES are title case.
+            -- Only 4 of 20 catalogue products have any in-force policies, so this is
+            -- LEFT JOINed and the zero is reported rather than hidden.
+            SELECT UPPER(POLICY_TYPE) AS CAT, UPPER(PLAN_TIER) AS TIER,
+                   COUNT(*) AS POLICIES_IN_FORCE,
+                   COUNT_IF(UPPER(POLICY_STATUS) = 'ACTIVE') AS ACTIVE_POLICIES,
+                   ROUND(AVG(LOSS_RATIO) * 100, 1) AS AVG_LOSS_RATIO_PCT
+            FROM {db}.CORE.POLICIES
+            GROUP BY 1, 2
+        )
+        SELECT
+            v.CATEGORY, v.PLAN_TIER, v.OUR_PRODUCT, v.PRICE_POSITION,
+            v.OUR_PREMIUM, v.COMP_AVG_PREMIUM, v.PRICE_DIFF_PCT,
+            ROUND(v.OUR_PREMIUM - v.COMP_AVG_PREMIUM, 2) AS PRICE_GAP_MONTHLY,
+
+            -- Indicated action from the price gap alone. The 8-factor procedure is
+            -- authoritative because it also weighs retention and loss ratio; this is a
+            -- fast screen so the whole board can render in one query.
+            CASE
+                WHEN v.PRICE_DIFF_PCT > 15  THEN 'REDUCE 5-10%'
+                WHEN v.PRICE_DIFF_PCT > 5   THEN 'REDUCE 2-5%'
+                WHEN v.PRICE_DIFF_PCT >= -5 THEN 'HOLD'
+                WHEN v.PRICE_DIFF_PCT >= -15 THEN 'INCREASE 2-5%'
+                ELSE 'INCREASE 5-10%'
+            END AS INDICATED_ACTION,
+
+            -- Multipliers match SP_PRICE_OPTIMIZE's own range for the REDUCE case
+            -- (market_avg x 0.93 and x 0.98), verified against its output.
+            CASE
+                WHEN v.PRICE_DIFF_PCT > 5    THEN ROUND(v.COMP_AVG_PREMIUM * 0.93, 2)
+                WHEN v.PRICE_DIFF_PCT >= -5  THEN ROUND(v.COMP_AVG_PREMIUM * 0.98, 2)
+                ELSE ROUND(v.COMP_AVG_PREMIUM * 1.02, 2)
+            END AS SUGGESTED_LOW,
+            CASE
+                WHEN v.PRICE_DIFF_PCT > 5    THEN ROUND(v.COMP_AVG_PREMIUM * 0.98, 2)
+                WHEN v.PRICE_DIFF_PCT >= -5  THEN ROUND(v.COMP_AVG_PREMIUM * 1.02, 2)
+                ELSE ROUND(v.COMP_AVG_PREMIUM * 1.07, 2)
+            END AS SUGGESTED_HIGH,
+
+            -- Does the coverage justify the premium?
+            v.OUR_COVERAGE, v.COMP_AVG_COVERAGE,
+            CASE WHEN v.COMP_AVG_COVERAGE > 0
+                 THEN ROUND((v.OUR_COVERAGE - v.COMP_AVG_COVERAGE) / v.COMP_AVG_COVERAGE * 100, 1)
+            END AS COVERAGE_ADVANTAGE_PCT,
+            CASE WHEN v.OUR_PREMIUM > 0
+                 THEN ROUND(v.OUR_COVERAGE / v.OUR_PREMIUM, 0) END AS COVERAGE_PER_DOLLAR,
+            CASE WHEN v.COMP_AVG_PREMIUM > 0
+                 THEN ROUND(v.COMP_AVG_COVERAGE / v.COMP_AVG_PREMIUM, 0) END AS MARKET_COVERAGE_PER_DOLLAR,
+
+            v.OUR_FEATURES, ce.COMP_AVG_FEATURES,
+            ROUND(v.OUR_FEATURES - ce.COMP_AVG_FEATURES, 1) AS FEATURE_GAP,
+            v.OUR_RATING, v.COMP_AVG_RATING,
+            ROUND(v.OUR_RATING - v.COMP_AVG_RATING, 2) AS RATING_EDGE,
+
+            v.COMPETITOR_COUNT, v.NEW_ENTRANTS, v.EXITING,
+            v.NEW_ENTRANTS - v.EXITING AS NET_ENTRANTS,
+            CASE
+                WHEN v.NEW_ENTRANTS > v.EXITING THEN 'Intensifying'
+                WHEN v.NEW_ENTRANTS < v.EXITING THEN 'Easing'
+                ELSE 'Stable'
+            END AS COMPETITIVE_PRESSURE,
+            ce.MARKET_SHARE_CONTESTED,
+            ce.CHEAPEST_COMP_PREMIUM, ce.DEAREST_COMP_PREMIUM,
+
+            -- Whether the repricing decision carries any money at all.
+            COALESCE(f.POLICIES_IN_FORCE, 0) AS POLICIES_IN_FORCE,
+            COALESCE(f.ACTIVE_POLICIES, 0) AS ACTIVE_POLICIES,
+            f.AVG_LOSS_RATIO_PCT,
+            ROUND(COALESCE(f.POLICIES_IN_FORCE, 0) * v.OUR_PREMIUM * 12, 2) AS ANNUAL_REVENUE_EXPOSED,
+            ROUND(
+                COALESCE(f.POLICIES_IN_FORCE, 0) * 12 * (
+                    CASE
+                        WHEN v.PRICE_DIFF_PCT > 5    THEN ROUND(v.COMP_AVG_PREMIUM * 0.98, 2)
+                        WHEN v.PRICE_DIFF_PCT >= -5  THEN v.OUR_PREMIUM
+                        ELSE ROUND(v.COMP_AVG_PREMIUM * 1.02, 2)
+                    END - v.OUR_PREMIUM
+                ), 2
+            ) AS ANNUAL_REVENUE_DELTA_IF_REPRICED
+
+        FROM {db}.{sh}.V_PRICE_COMPARISON v
+        LEFT JOIN comp_extra ce
+               ON UPPER(v.CATEGORY) = UPPER(ce.CATEGORY)
+              AND UPPER(v.PLAN_TIER) = UPPER(ce.PLAN_TIER)
+        LEFT JOIN in_force f
+               ON UPPER(v.CATEGORY) = f.CAT
+              AND UPPER(v.PLAN_TIER) = f.TIER
+        ORDER BY v.CATEGORY, v.PLAN_TIER
+        """
     )
     competitors, _ = manager.execute_query(
         f"SELECT COMPETITOR_NAME, CATEGORY, PLAN_TIER, PRODUCT_NAME, MONTHLY_PREMIUM, "
@@ -1461,6 +1558,19 @@ def get_market_pricing(mgr: Optional[SnowflakeManager] = None) -> Dict[str, Any]
         t = str(r.get("MARKET_TREND") or "UNKNOWN")
         trends[t] = trends.get(t, 0) + 1
 
+    def _f(val):
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return 0.0
+
+    actions: Dict[str, int] = {}
+    for r in comparison:
+        a = str(r.get("INDICATED_ACTION") or "UNKNOWN")
+        actions[a] = actions.get(a, 0) + 1
+
+    priced_with_book = [r for r in comparison if _f(r.get("POLICIES_IN_FORCE")) > 0]
+
     return {
         "status": "success" if comparison else "error",
         "message": None if comparison else manager.get_last_error(),
@@ -1468,7 +1578,82 @@ def get_market_pricing(mgr: Optional[SnowflakeManager] = None) -> Dict[str, Any]
         "competitors": competitors or [],
         "position_counts": positions,
         "trend_counts": trends,
+        "action_counts": actions,
+        # Only products with policies in force can move revenue, so the headline
+        # figures are restricted to those rather than summed across all 20 products.
+        "products_with_book": len(priced_with_book),
+        "revenue_exposed": round(sum(_f(r.get("ANNUAL_REVENUE_EXPOSED")) for r in priced_with_book), 2),
+        "revenue_delta_if_repriced": round(
+            sum(_f(r.get("ANNUAL_REVENUE_DELTA_IF_REPRICED")) for r in priced_with_book), 2
+        ),
     }
+
+
+def run_price_optimization(
+    category: str,
+    plan_tier: str,
+    mgr: Optional[SnowflakeManager] = None
+) -> Dict[str, Any]:
+    """Run the 8-factor pricing engine for one category/tier via SP_PRICE_OPTIMIZE.
+
+    This is the same procedure the agent's PriceOptimize tool calls, so the UI and the
+    conversational answer cannot disagree. It is invoked on demand rather than for all
+    20 products, because each call is a separate procedure execution.
+
+    The factor scores are flattened into a sorted list so the UI can rank the drags
+    without knowing the f1..f8 naming.
+    """
+    manager, db, sh = _sh(mgr)
+    if not category or not plan_tier:
+        return {"status": "error", "message": "Both category and plan_tier are required."}
+
+    try:
+        rows, _ = manager.execute_query_checked(
+            f"CALL {db}.{sh}.SP_PRICE_OPTIMIZE(%s, %s)",
+            (str(category).upper(), str(plan_tier).upper())
+        )
+    except SnowflakeQueryError as e:
+        return {"status": "error", "message": str(e)}
+
+    payload = rows[0] if rows else {}
+    raw = next(iter(payload.values()), None) if payload else None
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError) as e:
+        return {"status": "error", "message": f"Could not parse engine output: {e}"}
+    if not isinstance(parsed, dict):
+        return {"status": "error", "message": "Engine returned no result."}
+
+    _FACTOR_LABELS = {
+        "f1_price_competitiveness": "Price competitiveness",
+        "f2_value_for_money": "Value for money",
+        "f3_feature_advantage": "Feature advantage",
+        "f4_market_saturation": "Market saturation",
+        "f5_market_trend": "Market trend",
+        "f6_rating_edge": "Rating edge",
+        "f7_loss_ratio": "Loss ratio",
+        "f8_retention": "Retention",
+    }
+
+    factors = []
+    for key, val in (parsed.get("factor_scores") or {}).items():
+        if not isinstance(val, dict):
+            continue
+        score = val.get("score")
+        weight = val.get("weight")
+        factors.append({
+            "Factor": _FACTOR_LABELS.get(key, key),
+            "Score": score,
+            "Weight %": round(float(weight) * 100, 1) if weight is not None else None,
+            "Weighted": (round(float(score) * float(weight), 1)
+                         if score is not None and weight is not None else None),
+        })
+    factors.sort(key=lambda f: (f["Score"] is None, f["Score"]))
+
+    parsed["status"] = "success"
+    parsed["factors"] = factors
+    parsed["weakest_factor"] = factors[0] if factors else None
+    return parsed
 
 
 def get_plan_ratings_summary(mgr: Optional[SnowflakeManager] = None) -> Dict[str, Any]:
@@ -1501,16 +1686,52 @@ def get_plan_ratings_summary(mgr: Optional[SnowflakeManager] = None) -> Dict[str
     }
 
 
+def get_customer_plan_filter_options(
+    mgr: Optional[SnowflakeManager] = None
+) -> Dict[str, List[str]]:
+    """Distinct plan labels available to filter the customer directory by.
+
+    Sourced from CORE.POLICIES rather than the product catalog because every customer
+    holds policies, whereas only 10 of 250 have catalogue matches - a catalogue-driven
+    filter would return almost nothing for most selections.
+    """
+    manager, db, sh = _sh(mgr)
+    rows, _ = manager.execute_query(
+        f"""
+        SELECT DISTINCT POLICY_TYPE || ' ' || PLAN_TIER AS PLAN_NAME
+        FROM {db}.CORE.POLICIES
+        WHERE POLICY_TYPE IS NOT NULL AND PLAN_TIER IS NOT NULL
+        ORDER BY 1
+        """
+    )
+    tiers, _ = manager.execute_query(
+        f"""
+        SELECT DISTINCT PLAN_TIER FROM {db}.CORE.POLICIES
+        WHERE PLAN_TIER IS NOT NULL ORDER BY 1
+        """
+    )
+    return {
+        "plan_names": [r["PLAN_NAME"] for r in (rows or [])],
+        "plan_tiers": [r["PLAN_TIER"] for r in (tiers or [])],
+    }
+
+
 def get_customer_directory(
     mgr: Optional[SnowflakeManager] = None,
     search: Optional[str] = None,
     state: Optional[str] = None,
+    plan: Optional[str] = None,
+    status: Optional[str] = None,
     limit: int = 200
 ) -> List[Dict[str, Any]]:
     """Searchable customer list annotated with policy, match and rating counts.
 
-    Search and state are bound parameters; only the row limit is inlined, and it is
-    coerced to an int first.
+    plan filters to customers holding a policy whose "<TYPE> <TIER>" label matches, e.g.
+    "Auto Gold". status is one of ALL / ACTIVE / INACTIVE, where ACTIVE means the customer
+    holds at least one POLICY_STATUS = 'Active' policy.
+
+    Search, state, plan and status are bound parameters; only the row limit is inlined,
+    and it is coerced to an int first.
     """
     manager, db, sh = _sh(mgr)
     try:
@@ -1531,6 +1752,28 @@ def get_customer_directory(
         where.append("c.STATE = %s")
         params.append(str(state).upper())
 
+    # EXISTS rather than a join: a customer with three Auto Gold policies must appear
+    # once, not three times.
+    if plan and str(plan).upper() not in ("ALL", "NONE", ""):
+        where.append(
+            f"EXISTS (SELECT 1 FROM {db}.CORE.POLICIES pf "
+            f"WHERE pf.CUSTOMER_ID = c.CUSTOMER_ID "
+            f"AND UPPER(pf.POLICY_TYPE || ' ' || pf.PLAN_TIER) = UPPER(%s))"
+        )
+        params.append(str(plan).strip())
+
+    status_norm = str(status or "ALL").upper()
+    if status_norm == "ACTIVE":
+        where.append(
+            f"EXISTS (SELECT 1 FROM {db}.CORE.POLICIES ps "
+            f"WHERE ps.CUSTOMER_ID = c.CUSTOMER_ID AND UPPER(ps.POLICY_STATUS) = 'ACTIVE')"
+        )
+    elif status_norm == "INACTIVE":
+        where.append(
+            f"NOT EXISTS (SELECT 1 FROM {db}.CORE.POLICIES ps "
+            f"WHERE ps.CUSTOMER_ID = c.CUSTOMER_ID AND UPPER(ps.POLICY_STATUS) = 'ACTIVE')"
+        )
+
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
     sql = f"""
@@ -1545,12 +1788,20 @@ def get_customer_directory(
         c.CREDIT_SCORE,
         c.CUSTOMER_SINCE,
         COALESCE(p.POLICY_COUNT, 0) AS POLICY_COUNT,
+        COALESCE(p.ACTIVE_POLICY_COUNT, 0) AS ACTIVE_POLICY_COUNT,
+        CASE WHEN COALESCE(p.ACTIVE_POLICY_COUNT, 0) > 0 THEN 'Active' ELSE 'Inactive' END AS CUSTOMER_STATUS,
+        p.PLANS_HELD,
         COALESCE(p.TOTAL_PREMIUM, 0) AS TOTAL_PREMIUM,
         COALESCE(m.MATCH_COUNT, 0) AS MATCH_COUNT,
         COALESCE(r.RATING_COUNT, 0) AS RATING_COUNT
     FROM {db}.CORE.CUSTOMERS c
     LEFT JOIN (
-        SELECT CUSTOMER_ID, COUNT(*) AS POLICY_COUNT, ROUND(SUM(PREMIUM_AMOUNT), 2) AS TOTAL_PREMIUM
+        SELECT CUSTOMER_ID,
+               COUNT(*) AS POLICY_COUNT,
+               COUNT_IF(UPPER(POLICY_STATUS) = 'ACTIVE') AS ACTIVE_POLICY_COUNT,
+               ROUND(SUM(PREMIUM_AMOUNT), 2) AS TOTAL_PREMIUM,
+               LISTAGG(DISTINCT POLICY_TYPE || ' ' || PLAN_TIER, ', ')
+                   WITHIN GROUP (ORDER BY POLICY_TYPE || ' ' || PLAN_TIER) AS PLANS_HELD
         FROM {db}.CORE.POLICIES GROUP BY CUSTOMER_ID
     ) p ON c.CUSTOMER_ID = p.CUSTOMER_ID
     LEFT JOIN (
@@ -1573,13 +1824,33 @@ def get_customer_matches(
     customer_id: str,
     mgr: Optional[SnowflakeManager] = None
 ) -> List[Dict[str, Any]]:
-    """Saved product matches for one customer, best match first."""
+    """Saved product matches for one customer, best match first.
+
+    Joined to PRODUCT_CATALOG so the UI can show what the plan actually is - premium,
+    coverage, benefits and eligibility - instead of only the internal strategy scores
+    that produced the ranking. Every match currently resolves to a catalogue row, but
+    the join is LEFT so a match against a withdrawn product still lists rather than
+    silently disappearing.
+    """
     manager, db, sh = _sh(mgr)
     rows, _ = manager.execute_query(
-        f"SELECT PRODUCT_ID, PRODUCT_NAME, CATEGORY, PLAN_TIER, OVERALL_SCORE, MATCH_RANK, "
-        f"AI_REASONING, MATCHED_AT, TO_VARCHAR(STRATEGY_SCORES) AS STRATEGY_SCORES "
-        f"FROM {db}.{sh}.CUSTOMER_PRODUCT_MATCHES WHERE CUSTOMER_ID = %s "
-        f"ORDER BY MATCH_RANK",
+        f"""
+        SELECT
+            m.PRODUCT_ID, m.PRODUCT_NAME, m.CATEGORY, m.PLAN_TIER,
+            m.OVERALL_SCORE, m.MATCH_RANK, m.AI_REASONING, m.MATCHED_AT,
+            TO_VARCHAR(m.STRATEGY_SCORES) AS STRATEGY_SCORES,
+            p.MONTHLY_PREMIUM,
+            ROUND(p.MONTHLY_PREMIUM * 12, 2) AS ANNUAL_PREMIUM,
+            p.COVERAGE_LIMIT,
+            p.KEY_FEATURES,
+            p.ELIGIBILITY_CRITERIA,
+            p.MIN_AGE, p.MAX_AGE, p.MIN_INCOME,
+            p.RISK_LEVEL_MATCH, p.FAMILY_FRIENDLY
+        FROM {db}.{sh}.CUSTOMER_PRODUCT_MATCHES m
+        LEFT JOIN {db}.{sh}.PRODUCT_CATALOG p ON m.PRODUCT_ID = p.PRODUCT_ID
+        WHERE m.CUSTOMER_ID = %s
+        ORDER BY m.MATCH_RANK
+        """,
         (customer_id,)
     )
     return rows or []

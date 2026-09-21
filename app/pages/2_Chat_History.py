@@ -40,9 +40,11 @@ env_config = {k.strip(): v.strip() for k, v in dotenv_values(os.path.join(PROJEC
 from config.snowflake_manager import get_st_cached_snowflake_manager
 import services.backend_service as backend_service
 from styles.style_loader import inject_custom_css
+from app.lib.toasts import flush_toasts, queue_toast
 
 # Inject global enterprise stylesheet
 inject_custom_css()
+flush_toasts()
 cached_sf_mgr = get_st_cached_snowflake_manager()
 
 # Snowflake session context
@@ -91,7 +93,6 @@ with st.sidebar:
         <div class="sidebar-brand-card">
             <div style="display: flex; align-items: center; justify-content: space-between;">
                 <div class="sidebar-brand-title">❄ INSIGHT AI</div>
-                <span class="sidebar-live-pill">● ARCHIVE</span>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -263,8 +264,14 @@ with col_detail:
                     st.switch_page("pages/1_Enterprise_AI.py")
             with b_col2:
                 if st.button("🗑️ Delete", key="btn_del_session", use_container_width=True, type="secondary", help="Delete this session from Snowflake"):
-                    backend_service.delete_chat_session(current_sess_id, user_name=current_user, mgr=cached_sf_mgr)
+                    deleted = backend_service.delete_chat_session(current_sess_id, user_name=current_user, mgr=cached_sf_mgr)
                     st.session_state.selected_session_id = None
+                    # delete_chat_session returns False when the scoped DELETE failed,
+                    # so the toast reports the outcome rather than assuming success.
+                    queue_toast(
+                        "Conversation deleted" if deleted else "Could not delete conversation",
+                        "deleted" if deleted else "error",
+                    )
                     st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -290,20 +297,18 @@ with col_detail:
                     st.markdown(content)
                     st.caption(f"Sent at: {msg_time}")
                 else:
-                    # Determine engine
                     has_sql = bool(sql_query and str(sql_query).strip())
                     has_data = bool(query_data and len(query_data) > 0)
-                    
-                    if has_sql or has_data:
-                        engine_badge = '<span class="engine-badge cortex-analyst-badge">⚡ Snowflake Cortex Analyst</span>'
-                    else:
-                        engine_badge = '<span class="engine-badge cortex-search-badge">INSIGHT AI</span>'
+
+                    # One badge for every answer, matching the live chat: the product
+                    # name, not the Snowflake service that produced it.
+                    engine_badge = '<span class="engine-badge cortex-search-badge">INSIGHT AI</span>'
 
                     header_html = f'<div class="assistant-header-bar" style="margin-bottom:8px;"><div class="assistant-agent-tag"><span class="service-dot"></span>{engine_badge}</div><div class="assistant-model-pill">{msg_model} • {msg_time}</div></div>'
                     st.markdown(header_html, unsafe_allow_html=True)
 
                     if thinking and thinking.strip():
-                        with st.expander("💭 Cortex Agent Reasoning & Retrieval Trace", expanded=False):
+                        with st.expander("💭 Reasoning & Retrieval Trace", expanded=False):
                             st.markdown(thinking)
 
                     if not has_sql and not has_data:

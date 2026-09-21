@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 import services.backend_service as backend_service
+from app.lib.toasts import toast_now
 
 
 def extract_uploaded_file_content(uploaded_file):
@@ -158,9 +159,37 @@ def render_interactive_chart(df: pd.DataFrame, key_prefix: str = "", show_headin
         return
 
     cols = list(df.columns)
-    type_col = next((c for c in cols if any(k in c.lower() for k in ['policy_type', 'policy type', 'line', 'category', 'plan'])), None)
-    time_col = next((c for c in cols if any(k in c.lower() for k in ['month', 'date', 'period', 'horizon', 'quarter'])), None)
-    val_col = next((c for c in cols if any(k in c.lower() for k in ['forecast_new_policies', 'forecast', 'new_policies', 'policies', 'projected', 'count', 'value', 'amount', 'premium'])), None)
+
+    def _pick(keywords, exclude=()):
+        """First column matching a keyword, skipping ones already claimed.
+
+        exclude prevents a column being picked twice. Without it a result set with a
+        FORECAST_MONTH column is claimed as the time axis and then claimed AGAIN as the
+        value axis, because 'forecast' matches it before reaching FORECAST_NEW_POLICIES.
+        The chart then plots the month against itself.
+        """
+        for c in cols:
+            if c in exclude:
+                continue
+            if any(k in c.lower() for k in keywords):
+                return c
+        return None
+
+    type_col = _pick(['policy_type', 'policy type', 'line', 'category', 'plan'])
+    time_col = _pick(['month', 'date', 'period', 'horizon', 'quarter'],
+                     exclude={type_col})
+    # Numeric-first: prefer a genuinely numeric column over a keyword match on a label,
+    # so 'Assumed Premium' cannot beat 'Forecast New Policies' on a string column.
+    val_keywords = ['forecast_new_policies', 'new_policies', 'forecast', 'policies','demand'
+                    'projected', 'count', 'value', 'amount', 'premium']
+    claimed = {type_col, time_col}
+    val_col = next(
+        (c for c in cols
+         if c not in claimed
+         and pd.api.types.is_numeric_dtype(df[c])
+         and any(k in c.lower() for k in val_keywords)),
+        None
+    ) or _pick(val_keywords, exclude=claimed)
 
     if show_heading:
         st.markdown("#### 📈 Visualization & Trends")
@@ -249,31 +278,67 @@ def render_assistant_response(
     if not engine:
         engine = "CORTEX_ANALYST" if (has_sql or has_data) else "CORTEX_SEARCH"
 
-    # Glowing Engine Badge
-    if engine == "CORTEX_ANALYST":
-        st.markdown('<div style="margin-bottom: 8px;"><span class="engine-badge cortex-analyst-badge">⚡ Snowflake Cortex Analyst</span></div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div style="margin-bottom: 8px;"><span class="engine-badge cortex-search-badge">INSIGHT AI</span></div>', unsafe_allow_html=True)
+    # Response badge. Deliberately one label for both engines: the user asked to see
+    # the product name, not which Snowflake service answered. `engine` is still tracked
+    # in the message payload and in CHAT_HISTORY telemetry, it just isn't branded here.
+    st.markdown(
+        '<div style="margin-bottom: 8px;">'
+        '<span class="engine-badge cortex-search-badge">INSIGHT AI</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     if attached_doc:
         st.markdown(f'<div class="attached-file-badge">📎 Context: {attached_doc}</div>', unsafe_allow_html=True)
 
     if thinking and thinking.strip():
-        with st.expander("💭 Cortex Reasoning & Retrieval Trace", expanded=False):
+        with st.expander("💭 Reasoning & Retrieval Trace", expanded=False):
             st.markdown(thinking)
 
-    # Clean direct response for non-tabular Cortex Search
+    # Clean direct response when there is no table to render
     if not has_sql and not has_data:
         st.markdown(response_text)
         return
+
+    # Stable per-message id. Computed before the tabs because the tab default below
+    # needs the widget keys, and the SQL tab needs the same uid further down.
+    # The caller's msg_key_prefix is NOT stable: the same answer renders as "latest_pg"
+    # while the turn is live and as "chat_pg_<idx>" from history afterwards.
+    msg_uid = msg_dict.get("msg_uid")
+    if not msg_uid:
+        msg_uid = f"m{abs(hash((response_text or '')[:300] + str(sql_query))) % 10**10}"
+        msg_dict["msg_uid"] = msg_uid
+
+    SQL_TAB_TITLE = "🔍 Generated SQL"
+    run_key = f"btn_run_sql_{msg_uid}"
+    custom_run_key = f"btn_run_custom_{msg_uid}"
+    edit_toggle_key = f"toggle_edit_sql_{msg_uid}"
+    state_res_key = f"sql_run_result_{msg_uid}"
 
     tab_titles = ["💬 Executive Summary"]
     if has_data:
         tab_titles.append("📊 Visualizations & Analytics")
     if has_sql:
-        tab_titles.append("🔍 Generated SQL")
+        tab_titles.append(SQL_TAB_TITLE)
 
-    tabs = st.tabs(tab_titles)
+    # st.tabs does not survive a rerun: clicking "Run Query" reruns the script and the
+    # container rebuilds on the first tab, so results rendered into the SQL tab were
+    # invisible behind Executive Summary. A keyed button's value is readable from
+    # session_state BEFORE the tabs are created, so the run is detected early enough to
+    # open the right tab in the same run that produces the results.
+    if st.session_state.get(run_key) or st.session_state.get(custom_run_key):
+        st.session_state[f"active_tab_{msg_uid}"] = SQL_TAB_TITLE
+
+    default_tab = st.session_state.get(f"active_tab_{msg_uid}")
+    if default_tab not in tab_titles:
+        default_tab = None
+
+    try:
+        tabs = st.tabs(tab_titles, default=default_tab)
+    except TypeError:
+        # `default` was added to st.tabs in a later Streamlit; degrade to the old
+        # behaviour rather than failing to render the answer at all.
+        tabs = st.tabs(tab_titles)
     tab_idx = 0
 
     with tabs[tab_idx]:
@@ -314,22 +379,10 @@ def render_assistant_response(
             st.markdown("### 🔍 Snowflake SQL Query")
             st.code(sql_query, language="sql")
 
-            # Widget keys must be stable for this message across reruns. The caller's
-            # msg_key_prefix is not: the same answer renders as "latest_pg" while the
-            # turn is live and as "chat_pg_<idx>" from history afterwards. Keying on it
-            # meant the Run button vanished on the rerun its own click triggered, so the
-            # click was discarded and no results ever appeared. The uid is cached on the
-            # message dict, which session_state keeps alive between reruns.
-            msg_uid = msg_dict.get("msg_uid")
-            if not msg_uid:
-                msg_uid = f"m{abs(hash((response_text or '')[:300] + str(sql_query))) % 10**10}"
-                msg_dict["msg_uid"] = msg_uid
-
-            # Action controls to execute query live from UI
+            # Action controls to execute query live from UI.
+            # msg_uid, run_key, custom_run_key, edit_toggle_key and state_res_key are
+            # all defined above the tabs, because the tab default depends on them.
             col_run, col_edit, _col_spacer = st.columns([2.5, 2, 5.5])
-            run_key = f"btn_run_sql_{msg_uid}"
-            edit_toggle_key = f"toggle_edit_sql_{msg_uid}"
-            state_res_key = f"sql_run_result_{msg_uid}"
 
             with col_run:
                 run_clicked = st.button("▶ Run Query", key=run_key, type="primary", use_container_width=True)
@@ -346,7 +399,7 @@ def render_assistant_response(
                     height=130,
                     key=f"txt_sql_editor_{msg_uid}"
                 )
-                if st.button("▶ Execute Modified Query", key=f"btn_run_custom_{msg_uid}", type="secondary"):
+                if st.button("▶ Execute Modified Query", key=custom_run_key, type="secondary"):
                     run_clicked = True
 
             if run_clicked:
@@ -390,6 +443,20 @@ def render_assistant_response(
                         "sql": custom_sql,
                         "error": str(sql_exec_err)
                     }
+
+                # One toast per click, covering all three paths above. Emitted here
+                # rather than in the results block below, because that block re-renders
+                # on every rerun while the result stays in session_state and would
+                # re-fire the toast each time.
+                _run_state = st.session_state.get(state_res_key) or {}
+                if _run_state.get("error"):
+                    toast_now(str(_run_state["error"])[:90], "error")
+                elif _run_state.get("data") is not None:
+                    toast_now(
+                        f"{len(_run_state['data']):,} rows in "
+                        f"{_run_state.get('duration', 0):.2f}s",
+                        "success",
+                    )
 
             # Render query results when available
             if state_res_key in st.session_state:
