@@ -1601,37 +1601,6 @@ if st.session_state.current_nav in ["◈ Insurance Portfolio", "Insurance Portfo
         </div>
     """, unsafe_allow_html=True)
 
-    with st.expander("📋 Data Quality Detail — measured on CORE.POLICIES, CLAIMS & CUSTOMERS"):
-        detail = dts_data.get("completeness_detail", {})
-        if detail.get("status") != "success":
-            st.warning(f"Could not measure data quality: {detail.get('message', 'unknown error')}")
-        else:
-            dq_c1, dq_c2, dq_c3 = st.columns(3)
-            dq_c1.metric("Field Completeness", f"{detail.get('completeness_pct')}%",
-                         help=f"{detail.get('populated_values'):,} of {detail.get('expected_values'):,} required values populated")
-            dq_c2.metric("Row Validity", f"{detail.get('validity_pct')}%",
-                         help=f"{detail.get('violation_count'):,} range/ordering violations across {detail.get('rows_examined'):,} rows")
-            dq_c3.metric("Checks Run", f"{detail.get('fields_checked')} fields · {len(detail.get('violations', []))} rules")
-
-            st.caption("Completeness by field")
-            st.dataframe(pd.DataFrame(detail.get("field_checks", [])),
-                         width="stretch", hide_index=True)
-            st.caption("Validity rule violations")
-            st.dataframe(pd.DataFrame(detail.get("violations", [])),
-                         width="stretch", hide_index=True)
-
-        if not dts_data.get("dq_rules_available"):
-            st.caption(
-                "UNIFIEDAI_SH.DQ_RULES is empty, so no rule-based quality dimensions are "
-                "available. The figures above are measured directly from the CORE tables."
-            )
-        else:
-            st.caption("Rule-based quality dimensions from UNIFIEDAI_SH.DQ_RULES")
-            st.dataframe(pd.DataFrame(dts_data.get("quality_dimensions", [])),
-                         width="stretch", hide_index=True)
-
-
-
     # ---------------------------------------------------------
     # ROW 2: CHARTS — TREND ANALYSIS (CALCULATED FROM CORE.CLAIMS & RISK.AT_RISK_POLICIES)
     # ---------------------------------------------------------
