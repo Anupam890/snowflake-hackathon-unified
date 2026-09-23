@@ -1656,6 +1656,25 @@ def run_price_optimization(
     return parsed
 
 
+def get_product_catalog(mgr: Optional[SnowflakeManager] = None) -> List[Dict[str, Any]]:
+    """Every sellable plan, for the rating picker.
+
+    The rating dropdown is sourced from here rather than from
+    CUSTOMER_PRODUCT_MATCHES so any catalogue plan can be rated, not just the ~5 the
+    matcher shortlisted for one customer. SP_RATE_PLAN validates PRODUCT_ID itself, so
+    widening the picker needs no procedure change.
+    """
+    manager, db, sh = _sh(mgr)
+    rows, _ = manager.execute_query(
+        f"""
+        SELECT PRODUCT_ID, PRODUCT_NAME, CATEGORY, PLAN_TIER, MONTHLY_PREMIUM
+        FROM {db}.{sh}.PRODUCT_CATALOG
+        ORDER BY CATEGORY, PLAN_TIER, PRODUCT_NAME
+        """
+    )
+    return rows or []
+
+
 def get_plan_ratings_summary(mgr: Optional[SnowflakeManager] = None) -> Dict[str, Any]:
     """Per-product rating health.
 
