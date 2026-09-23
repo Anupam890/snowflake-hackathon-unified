@@ -1029,6 +1029,13 @@ def fetch_customer_360(customer_id: str):
     return backend_service.get_customer_360(customer_id=customer_id, mgr=cached_sf_mgr)
 
 
+# The catalogue changes only when products are added or withdrawn, so it is cached
+# far longer than the per-customer match rows.
+@st.cache_data(ttl=600)
+def fetch_product_catalog():
+    return backend_service.get_product_catalog(mgr=cached_sf_mgr)
+
+
 def clear_rating_caches():
     """Drop the caches a rating or match write invalidates."""
     fetch_plan_ratings_summary.clear()
@@ -1036,6 +1043,8 @@ def clear_rating_caches():
     fetch_customer_matches.clear()
     fetch_customer_360.clear()
     fetch_plan_filter_options.clear()
+    # SP_RATE_PLAN updates PRODUCT_CATALOG.CUSTOMER_RATING, so the catalogue is stale too.
+    fetch_product_catalog.clear()
 
 
 
@@ -2421,13 +2430,53 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                                 st.caption(f"**Why this matched:** {mrow['AI_REASONING']}")
                             st.divider()
 
-                    def _plan_opt_label(m):
-                        prem = m.get("MONTHLY_PREMIUM")
-                        money = f" — ${float(prem):,.2f}/mo" if prem is not None else ""
-                        return (f"#{m['MATCH_RANK']} {m['PRODUCT_NAME']} "
-                                f"({m['CATEGORY']}/{m['PLAN_TIER']}){money}")
+                # Rating is deliberately NOT gated on the customer having matches. The
+                # picker is sourced from PRODUCT_CATALOG so all 20 plans are always
+                # rateable, with the matcher's suggestions marked. SP_RATE_PLAN validates
+                # PRODUCT_ID itself, so widening the picker needs no procedure change.
+                st.markdown("#### ⭐ Rate a Plan")
+                catalog = fetch_product_catalog()
+                suggested_ranks = {
+                    m["PRODUCT_ID"]: m.get("MATCH_RANK")
+                    for m in matches if m.get("PRODUCT_ID")
+                }
 
-                    rate_label = {m["PRODUCT_ID"]: _plan_opt_label(m) for m in matches}
+                if not catalog:
+                    st.info("PRODUCT_CATALOG is empty, so there is no plan to rate.")
+                else:
+                    def _plan_opt_label(p):
+                        prem = p.get("MONTHLY_PREMIUM")
+                        money = f" — ${float(prem):,.2f}/mo" if prem is not None else ""
+                        rank = suggested_ranks.get(p["PRODUCT_ID"])
+                        mark = f"⭐ Suggested #{rank} · " if rank is not None else ""
+                        return (f"{mark}{p['PRODUCT_NAME']} "
+                                f"({p.get('CATEGORY') or '—'}/{p.get('PLAN_TIER') or '—'}){money}")
+
+                    # Suggested plans sort first: with all 20 products listed, the ones the
+                    # matcher actually recommended should still be the easiest to reach.
+                    ordered = sorted(
+                        catalog,
+                        key=lambda p: (
+                            suggested_ranks.get(p["PRODUCT_ID"]) is None,
+                            suggested_ranks.get(p["PRODUCT_ID"]) or 0,
+                            p.get("CATEGORY") or "",
+                            p.get("PLAN_TIER") or "",
+                        ),
+                    )
+                    rate_label = {p["PRODUCT_ID"]: _plan_opt_label(p) for p in ordered}
+
+                    if suggested_ranks:
+                        st.caption(
+                            f"Any of the {len(ordered)} catalogue plans can be rated. The "
+                            f"{len(suggested_ranks)} suggested for this customer are marked ⭐ "
+                            "and listed first."
+                        )
+                    else:
+                        st.caption(
+                            f"Any of the {len(ordered)} catalogue plans can be rated. This "
+                            "customer has no suggested plans yet."
+                        )
+
                     r_col1, r_col2 = st.columns([5, 2])
                     with r_col1:
                         sel_product = st.selectbox(
