@@ -2111,12 +2111,17 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
     # Grouped sub-navigation rather than one row of seven tabs: the groups serve
     # different audiences (analyst / CSR / executive) and keep any tab row to three
     # labels so nothing is truncated on narrower screens.
-    if "explore_group" not in st.session_state:
-        st.session_state.explore_group = "🏛️ Operations"
+    EXPLORE_GROUPS = ["👤 Customers & Ratings", "💡 Strategy & Market"]
+
+    # Validate against the current list: a session carried over from when the
+    # Operations group existed would otherwise hold a label that matches no branch
+    # below, rendering an empty Explore tab.
+    if st.session_state.get("explore_group") not in EXPLORE_GROUPS:
+        st.session_state.explore_group = EXPLORE_GROUPS[0]
 
     explore_group = st.segmented_control(
         "Explorer area",
-        options=["🏛️ Operations", "👤 Customers & Ratings", "💡 Strategy & Market"],
+        options=EXPLORE_GROUPS,
         default=st.session_state.explore_group,
         key="explore_group_selector",
         label_visibility="collapsed",
@@ -2124,182 +2129,28 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
     st.session_state.explore_group = explore_group
 
     # ------------------------------------------------------------------
-    # GROUP 1: OPERATIONS
+    # GROUP 1: CUSTOMERS & RATINGS
     # ------------------------------------------------------------------
-    if explore_group == "🏛️ Operations":
-        exp_tab1, exp_tab2, exp_tab3 = st.tabs(
-            ["🏛️ Policies & Revenue", "🚨 Claims & Loss Ratios", "🗺️ Geographic Distribution"]
-        )
-
-        with exp_tab1:
-            st.markdown("### Policy Types & Plan Tier Breakdown")
-            # Values are returned as numbers and formatted in the dataframe, so the
-            # columns remain numerically sortable. Formatting them in SQL with
-            # CONCAT/TO_VARCHAR produced strings that sorted lexicographically.
-            sql_exp_p = f"""SELECT 
-                POLICY_TYPE AS "Policy Type", 
-                COUNT(POLICY_ID) AS "Policies", 
-                ROUND(SUM(PREMIUM_AMOUNT), 2) AS "Revenue", 
-                ROUND(AVG(PREMIUM_AMOUNT), 2) AS "Avg Premium", 
-                ROUND(AVG(LOSS_RATIO) * 100.0, 1) AS "Avg Loss Ratio %" 
-            FROM {current_db}.CORE.POLICIES 
-            GROUP BY POLICY_TYPE 
-            ORDER BY SUM(PREMIUM_AMOUNT) DESC;"""
-            rows_p, _ = cached_sf_mgr.execute_query(sql_exp_p)
-            if rows_p is None:
-                st.error(f"❌ Query failed: {cached_sf_mgr.get_last_error()}")
-            elif not rows_p:
-                st.info("No policy records found.")
-            else:
-                st.dataframe(
-                    pd.DataFrame(rows_p),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Revenue": st.column_config.NumberColumn("Revenue", format="$%.2f"),
-                        "Avg Premium": st.column_config.NumberColumn("Avg Premium", format="$%.2f"),
-                        "Avg Loss Ratio %": st.column_config.NumberColumn("Avg Loss Ratio %", format="%.1f%%"),
-                    },
-                )
-
-        with exp_tab2:
-            st.markdown("### Claims Distribution by Status")
-            # Group on the coalesced expression. Previously the SELECT coalesced NULL to
-            # 'Approved' but the GROUP BY used the raw column, so NULL statuses were
-            # displayed as genuine approvals.
-            sql_exp_c = f"""SELECT 
-                COALESCE(CLAIM_STATUS, 'Unspecified') AS "Status", 
-                COUNT(CLAIM_ID) AS "Count" 
-            FROM {current_db}.CORE.CLAIMS 
-            GROUP BY COALESCE(CLAIM_STATUS, 'Unspecified')
-            ORDER BY "Count" DESC;"""
-            rows_c, _ = cached_sf_mgr.execute_query(sql_exp_c)
-            if rows_c is None:
-                st.error(f"❌ Query failed: {cached_sf_mgr.get_last_error()}")
-            elif not rows_c:
-                st.info("No claims status records found.")
-            else:
-                df_c = pd.DataFrame(rows_c)
-                st.bar_chart(df_c.set_index("Status"), use_container_width=True, height=280)
-                st.dataframe(df_c, use_container_width=True, hide_index=True)
-
-        with exp_tab3:
-            st.markdown("### States by Premium Revenue")
-            top_n = st.slider("States to show", min_value=3, max_value=15, value=10, key="exp_geo_topn")
-            sql_exp_g = f"""SELECT 
-                COALESCE(c.STATE, 'Unknown') AS "State", 
-                ROUND(SUM(p.PREMIUM_AMOUNT), 2) AS "Total Premium", 
-                COUNT(p.POLICY_ID) AS "Policies" 
-            FROM {current_db}.CORE.POLICIES p 
-            JOIN {current_db}.CORE.CUSTOMERS c ON p.CUSTOMER_ID = c.CUSTOMER_ID 
-            GROUP BY COALESCE(c.STATE, 'Unknown')
-            ORDER BY "Total Premium" DESC 
-            LIMIT {int(top_n)};"""
-            rows_g, _ = cached_sf_mgr.execute_query(sql_exp_g)
-            if rows_g is None:
-                st.error(f"❌ Query failed: {cached_sf_mgr.get_last_error()}")
-            elif not rows_g:
-                st.info("No geographic customer data found.")
-            else:
-                df_geo = pd.DataFrame(rows_g)
-                # Bar, not line: states are categorical and a line implies continuity
-                # between them.
-                st.bar_chart(df_geo.set_index("State")[["Total Premium"]],
-                             use_container_width=True, height=300)
-                st.dataframe(
-                    df_geo, use_container_width=True, hide_index=True,
-                    column_config={
-                        "Total Premium": st.column_config.NumberColumn("Total Premium", format="$%.2f")
-                    },
-                )
-
-    # ------------------------------------------------------------------
-    # GROUP 2: CUSTOMERS & RATINGS
-    # ------------------------------------------------------------------
-    elif explore_group == "👤 Customers & Ratings":
+    if explore_group == "👤 Customers & Ratings":
         cust_tab, ratings_tab = st.tabs(["👤 Customer Directory & Plan Rating", "⭐ Plan Rating Analytics"])
 
         with cust_tab:
             st.markdown("### Customer Directory")
-            st.caption(
-                "Select a customer to see their matched plans and submit a rating. "
-                "Ratings are written through `SP_RATE_PLAN` — the same procedure the agent's "
-                "RatePlan tool uses."
-            )
-
-            f_search, f_state, f_plan, f_status, f_limit = st.columns([3.2, 1.5, 2, 1.8, 1.2])
-            with f_search:
-                cust_search = st.text_input(
-                    "Search by name, ID or email", value="", key="exp_cust_search",
-                    placeholder="e.g. John, CUST-00012, @email",
-                )
-            with f_state:
-                state_opts = ["All", "TX", "CA", "PA", "IL", "AZ", "NY", "GA"]
-                cust_state = st.selectbox("State", state_opts, key="exp_cust_state")
-            with f_plan:
-                # Options come from the data rather than a hardcoded list, so they stay
-                # correct if the policy mix changes.
-                plan_opts = ["All plans"] + fetch_plan_filter_options().get("plan_names", [])
-                cust_plan = st.selectbox(
-                    "Plan held", plan_opts, key="exp_cust_plan",
-                    help="Policy type and tier the customer holds, from CORE.POLICIES",
-                )
-            with f_status:
-                status_labels = {
-                    "All": "All",
-                    "ACTIVE": "Active only",
-                    "INACTIVE": "No active policy",
-                }
-                cust_status = st.selectbox(
-                    "Status", list(status_labels.keys()),
-                    format_func=lambda s: status_labels[s], key="exp_cust_status",
-                    help="Active means the customer holds at least one policy with POLICY_STATUS = 'Active'",
-                )
-            with f_limit:
-                cust_limit = st.selectbox("Rows", [50, 100, 200, 500], index=2, key="exp_cust_limit")
 
             directory = fetch_customer_directory(
-                search=cust_search or None,
-                state=None if cust_state == "All" else cust_state,
-                plan=None if cust_plan == "All plans" else cust_plan,
-                status=cust_status,
-                limit=int(cust_limit),
+                search=None, state=None, plan=None, status="All", limit=200,
             )
 
             if not directory:
-                st.info("No customers match the current filters.")
+                st.info("No customers found.")
             else:
-                df_dir = pd.DataFrame(directory)
-                active_n = int((df_dir["ACTIVE_POLICY_COUNT"] > 0).sum())
-                st.caption(
-                    f"Showing **{len(df_dir):,}** customers — {active_n:,} with an active policy, "
-                    f"{len(df_dir) - active_n:,} without"
-                )
-                st.dataframe(
-                    df_dir,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=280,
-                    column_config={
-                        "CUSTOMER_ID": st.column_config.TextColumn("Customer ID", width="small"),
-                        "CUSTOMER_NAME": st.column_config.TextColumn("Name", width="medium"),
-                        "CUSTOMER_STATUS": st.column_config.TextColumn("Status", width="small"),
-                        "PLANS_HELD": st.column_config.TextColumn("Plans Held", width="medium"),
-                        "ACTIVE_POLICY_COUNT": st.column_config.NumberColumn("Active", width="small"),
-                        "AGE": st.column_config.NumberColumn("Age", width="small"),
-                        "ANNUAL_INCOME": st.column_config.NumberColumn("Income", format="$%.0f"),
-                        "CREDIT_SCORE": st.column_config.NumberColumn("Credit", width="small"),
-                        "TOTAL_PREMIUM": st.column_config.NumberColumn("Premium", format="$%.2f"),
-                        "POLICY_COUNT": st.column_config.NumberColumn("Policies", width="small"),
-                        "MATCH_COUNT": st.column_config.NumberColumn("Matches", width="small"),
-                        "RATING_COUNT": st.column_config.NumberColumn("Ratings", width="small"),
-                    },
-                )
-
                 label_by_id = {
                     r["CUSTOMER_ID"]: f"{r['CUSTOMER_ID']} — {r['CUSTOMER_NAME']} ({r.get('STATE') or '—'})"
                     for r in directory
                 }
+                # Status is read off the directory row rather than recomputed: it is already
+                # derived there from ACTIVE_POLICY_COUNT, so the two cannot disagree.
+                dir_by_id = {r["CUSTOMER_ID"]: r for r in directory}
                 sel_customer = st.selectbox(
                     "Selected customer",
                     options=list(label_by_id.keys()),
@@ -2323,13 +2174,42 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                         f"<span style='color:#64748B;font-size:0.8rem;'>`{sel_customer}`</span>",
                         unsafe_allow_html=True,
                     )
-                    st.caption(
-                        f"{prof.get('OCCUPATION') or 'Occupation unknown'} • "
-                        f"{prof.get('CITY') or '—'}, {prof.get('STATE') or '—'} "
-                        f"{prof.get('ZIP_CODE') or ''} • Age {prof.get('AGE') or '—'} • "
-                        f"{prof.get('MARITAL_STATUS') or '—'} • "
-                        f"Customer since {str(prof.get('CUSTOMER_SINCE') or '—')[:10]} • "
-                        f"{prof.get('EMAIL') or 'no email'}"
+
+                    # Tier comes from the policies the customer actually holds. A customer
+                    # can hold more than one tier, so every distinct tier is listed rather
+                    # than picking one arbitrarily.
+                    dir_row = dir_by_id.get(sel_customer, {})
+                    tiers = sorted({
+                        (p.get("PLAN_TIER") or "").strip()
+                        for p in c360.get("policies", [])
+                        if (p.get("PLAN_TIER") or "").strip()
+                    })
+                    city = prof.get("CITY") or "—"
+                    state_cd = prof.get("STATE") or "—"
+                    zip_cd = prof.get("ZIP_CODE") or ""
+
+                    st.dataframe(
+                        pd.DataFrame([{
+                            "Customer ID": sel_customer,
+                            "Occupation": prof.get("OCCUPATION") or "—",
+                            # State has its own column, so it is not repeated here.
+                            "Location": f"{city} {zip_cd}".strip(),
+                            "State": state_cd,
+                            "Age": prof.get("AGE") if prof.get("AGE") is not None else "—",
+                            "Marital Status": prof.get("MARITAL_STATUS") or "—",
+                            "Customer Since": str(prof.get("CUSTOMER_SINCE") or "—")[:10],
+                            "Email": prof.get("EMAIL") or "no email",
+                            "Income": prof.get("ANNUAL_INCOME"),
+                            "Credit": prof.get("CREDIT_SCORE"),
+                            "Status": dir_row.get("CUSTOMER_STATUS") or "—",
+                            "Tier": ", ".join(tiers) if tiers else "—",
+                        }]),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Income": st.column_config.NumberColumn("Income", format="$%.0f"),
+                            "Credit": st.column_config.NumberColumn("Credit", format="%d"),
+                        },
                     )
 
                     k1, k2, k3, k4, k5 = st.columns(5)
@@ -2452,7 +2332,7 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                             st.info("This customer has not rated any plan yet.")
 
 
-                st.markdown("#### 🎯 Matched Plans")
+                st.markdown("#### 🎯 Suggested Plans")
                 matches = fetch_customer_matches(sel_customer)
 
                 if not matches:
@@ -2657,10 +2537,14 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
                 st.bar_chart(df_cat.set_index("CATEGORY"), use_container_width=True, height=260)
 
     # ------------------------------------------------------------------
-    # GROUP 3: STRATEGY & MARKET
+    # GROUP 2: STRATEGY & MARKET
     # ------------------------------------------------------------------
     else:
-        strat_tab, market_tab = st.tabs(["💡 Strategic Recommendations", "📈 Market & Pricing"])
+        # Market & Pricing is the first tab: it establishes the competitive and pricing
+        # context that the recommendations are derived from, so it reads in that order.
+        # Unpacked positionally to match the new tab order while the `with` blocks below
+        # stay where they are.
+        market_tab, strat_tab = st.tabs(["📈 Market & Pricing", "💡 Strategic Recommendations"])
 
         with strat_tab:
             recs = fetch_strategic_recommendations()
@@ -3106,79 +2990,40 @@ elif st.session_state.current_nav in ["⚡ Explore", "Explore"]:
 # VIEW 4: 📊 DATA (Snowflake Catalog & Multi-Schema Table Browser)
 # ---------------------------------------------------------
 elif st.session_state.current_nav in ["📊 Data", "Data"]:
-    st.markdown("## 📊 Snowflake Multi-Schema Data Catalog")
-    st.caption("Live enterprise catalog metadata, schema distribution, and interactive table browser across all database schemas.")
+    # Data quality detail lives here rather than on the portfolio dashboard: it is
+    # catalog / integrity information, not a portfolio KPI. Rendered inline rather than
+    # in an expander so the figures are visible without a click. Measured directly on
+    # the CORE tables, because all three DQ_* tables are empty.
+    st.markdown("### 📋 Data Quality Detail")
+    st.caption("Measured on CORE.POLICIES, CLAIMS & CUSTOMERS")
 
-    c_cat_schema, c_cat_stats = st.columns([2, 2])
-    with c_cat_schema:
-        catalog_schema_filter = st.selectbox(
-            "Filter Catalog by Schema",
-            ["All Schemas", "CORE", "ANALYTICS", "RISK", "PREMIUM", "UNIFIEDAI_SH"],
-            index=0,
-            key="catalog_schema_selector"
-        )
-    
-    schema_clause = f"AND TABLE_SCHEMA = '{catalog_schema_filter}'" if catalog_schema_filter != "All Schemas" else ""
-    sql_tables = f"""SELECT 
-        TABLE_SCHEMA AS "Schema",
-        TABLE_NAME AS "Table Name", 
-        ROW_COUNT AS "Rows", 
-        BYTES AS "Bytes", 
-        TABLE_TYPE AS "Table Type" 
-    FROM {current_db}.INFORMATION_SCHEMA.TABLES 
-    WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA') {schema_clause}
-    ORDER BY TABLE_SCHEMA, TABLE_NAME;"""
-    table_rows, _ = cached_sf_mgr.execute_query(sql_tables)
-    df_catalog = pd.DataFrame(table_rows or [])
-    
-    with c_cat_stats:
-        total_tbls = len(df_catalog)
-        total_rows_sum = int(df_catalog["Rows"].sum()) if not df_catalog.empty and "Rows" in df_catalog else 0
-        st.markdown(f"""
-            <div style="background: rgba(30,41,59,0.7); padding: 12px 16px; border-radius: 8px; border: 1px solid rgba(148,163,184,0.15); margin-top: 4px;">
-                <span style="color:#94A3B8; font-size:0.8rem;">Catalog Scope:</span> 
-                <b style="color:#38BDF8;">{catalog_schema_filter}</b> &nbsp;•&nbsp; 
-                <span style="color:#94A3B8; font-size:0.8rem;">Tables:</span> <b style="color:#34D399;">{total_tbls}</b> &nbsp;•&nbsp; 
-                <span style="color:#94A3B8; font-size:0.8rem;">Indexed Records:</span> <b style="color:#F1F5F9;">{total_rows_sum:,}</b>
-            </div>
-        """, unsafe_allow_html=True)
-
-    st.dataframe(df_catalog, use_container_width=True)
-    
-    st.markdown("### 🔍 Live Multi-Schema Table Preview")
-    preview_table_options = [
-        ("CORE", "POLICIES"),
-        ("CORE", "CLAIMS"),
-        ("CORE", "CUSTOMERS"),
-        ("CORE", "AGENTS"),
-        ("ANALYTICS", "CLAIMS_KPI"),
-        ("ANALYTICS", "POLICY_TRENDS"),
-        ("ANALYTICS", "LOSS_RATIO_HISTORY"),
-        ("RISK", "AT_RISK_POLICIES"),
-        ("RISK", "CHURN_PREDICTIONS"),
-        ("PREMIUM", "PLAN_TIERS"),
-        ("PREMIUM", "PREMIUM_CALCULATIONS"),
-        ("UNIFIEDAI_SH", "DQ_RULES"),
-        ("UNIFIEDAI_SH", "DQ_VALIDATION_RESULTS")
-    ]
-    
-    # Filter preview table list if a specific schema is chosen
-    if catalog_schema_filter != "All Schemas":
-        available_previews = [f"{s}.{t}" for s, t in preview_table_options if s == catalog_schema_filter]
+    detail = dts_data.get("completeness_detail", {})
+    if detail.get("status") != "success":
+        st.warning(f"Could not measure data quality: {detail.get('message', 'unknown error')}")
     else:
-        available_previews = [f"{s}.{t}" for s, t in preview_table_options]
-        
-    selected_preview = st.selectbox(
-        "Select Table to Preview Live Rows",
-        available_previews if available_previews else ["CORE.POLICIES"],
-        index=0,
-        key="table_preview_selector"
-    )
-    
-    p_schema, p_table = selected_preview.split(".")
-    sql_preview = f"SELECT * FROM {current_db}.{p_schema}.{p_table} LIMIT 8;"
-    preview_rows, _ = cached_sf_mgr.execute_query(sql_preview)
-    st.dataframe(pd.DataFrame(preview_rows or []), use_container_width=True)
+        dq_c1, dq_c2, dq_c3 = st.columns(3)
+        dq_c1.metric("Field Completeness", f"{detail.get('completeness_pct')}%",
+                     help=f"{detail.get('populated_values'):,} of {detail.get('expected_values'):,} required values populated")
+        dq_c2.metric("Row Validity", f"{detail.get('validity_pct')}%",
+                     help=f"{detail.get('violation_count'):,} range/ordering violations across {detail.get('rows_examined'):,} rows")
+        dq_c3.metric("Checks Run", f"{detail.get('fields_checked')} fields · {len(detail.get('violations', []))} rules")
+
+        st.caption("Completeness by field")
+        st.dataframe(pd.DataFrame(detail.get("field_checks", [])),
+                     width="stretch", hide_index=True)
+        st.caption("Validity rule violations")
+        st.dataframe(pd.DataFrame(detail.get("violations", [])),
+                     width="stretch", hide_index=True)
+
+    if not dts_data.get("dq_rules_available"):
+        st.caption(
+            "UNIFIEDAI_SH.DQ_RULES is empty, so no rule-based quality dimensions are "
+            "available. The figures above are measured directly from the CORE tables."
+        )
+    else:
+        st.caption("Rule-based quality dimensions from UNIFIEDAI_SH.DQ_RULES")
+        st.dataframe(pd.DataFrame(dts_data.get("quality_dimensions", [])),
+                     width="stretch", hide_index=True)
 
 
 # ---------------------------------------------------------
