@@ -114,9 +114,19 @@ def remove_recommended_next_steps(text: str) -> str:
 
 def escape_dollars_for_markdown(text: str) -> str:
     """
-    Escapes standalone dollar currency symbols ($1,000, $1M, $500/mo) to prevent
-    Streamlit's KaTeX parser from misinterpreting currency numbers as LaTeX math equations.
-    Preserves code blocks and pre-escaped dollar signs.
+    Escapes markdown-hostile characters in agent prose so currency and approximations
+    render literally.
+
+    Two problems, both caused by the agent's own writing style:
+
+    - Standalone dollar amounts ($1,000, $1M, $500/mo) make Streamlit's KaTeX parser
+      treat everything between two of them as a math span and mangle the text.
+    - A tilde meaning "approximately" (~$167.5K) is markdown strikethrough. One per
+      line is harmless, but two in the same line pair up and strike out everything
+      between them, e.g. "lowest premium (~$167.5K) and the lowest claim (~$32.4K)"
+      renders with the middle struck through.
+
+    Code blocks, inline code and pre-escaped characters are left alone.
     """
     if not text:
         return ""
@@ -144,6 +154,11 @@ def escape_dollars_for_markdown(text: str) -> str:
             escaped = re.sub(r'(?<!\\)\$(\d+(?:,\d{3})*(?:\.\d+)?(?:[kKmMbB](?![a-zA-Z]))?)', r'\\$\1', sub_part)
             # Match unescaped $ before single digits
             escaped = re.sub(r'(?<!\\)\$([0-9])', r'\\$\1', escaped)
+            # Escape an approximation tilde, i.e. one directly before a number or a
+            # (now backslash-escaped) currency amount. Scoped this tightly on purpose so
+            # a deliberate ~~strikethrough~~ still works: its second tilde is followed by
+            # a letter, which this does not match.
+            escaped = re.sub(r'(?<!\\)~(?=[\d$\\])', r'\\~', escaped)
             sub_processed.append(escaped)
         processed_parts.append("".join(sub_processed))
     

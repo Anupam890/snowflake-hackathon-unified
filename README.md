@@ -192,7 +192,7 @@ these from browser uploads), whitelists `[A-Za-z0-9._-]`, and raises on an empty
 | Requirement | Implementation |
 |---|---|
 | **AI/SQL** | 4 Cortex Analyst semantic views; agent-authored SQL shown and executable in-UI |
-| **Cortex Agents** | 1 agent, 13 tools, SSE streaming with live tool narration |
+| **Cortex Agents** | 1 agent, 13 tools + 2 MCP connectors, SSE streaming with live tool narration |
 | **Product matching, multi-strategy** | `SP_PRODUCT_MATCH_AND_SAVE` + 27 `MATCHING_RULES`, ranked with AI reasoning |
 | **Price optimization agent** | `SP_PRICE_OPTIMIZE` — 8 weighted factors, suggested range, net revenue impact |
 | **Market intelligence / trend detection** | `V_PRICE_COMPARISON` + 60 competitor products; entrant/exit pressure; `SP_UNIFIED_DEMAND_ENGINE` |
@@ -201,31 +201,26 @@ these from browser uploads), whitelists `[A-Za-z0-9._-]`, and raises on an empty
 | **Matching accuracy metrics** | Match scores, `V_MATCH_SUMMARY`, rating feedback loop via `SP_RATE_PLAN` |
 | **Document intelligence** | Stage → chunk → embed → Cortex Search, with app-side retrieval injection |
 | **Data trust / conversational RCA** | Measured completeness + `SP_DQ_ROOT_CAUSE_ANALYSIS` |
-| **MCP Integration** | Designed and documented — see below |
+| **MCP Integration** | 2 connectors implemented — Jira (Atlassian) and Gmail — see below |
 
 ### MCP integration
 
-Evaluated all ten available connectors. **Adopted: Atlassian and Salesforce.**
-Conditional: Google Drive.
+The agent reaches enterprise systems outside Snowflake through **MCP connectors**:
+Snowflake's mechanism for a Cortex Agent to discover and invoke tools on a remote Model
+Context Protocol server. Two connectors are implemented, so the agent can **act** across
+systems as well as answer questions.
 
-- **Atlassian** — the only connector serving all three pillars. Confluence supplies KPI
-  definitions that do not exist in the warehouse; Jira turns the 58 detected violations
-  into filed remediation tickets, which matters because all three `DQ_*` tables are empty.
-- **Salesforce** — closes the loop. `CUSTOMER_PRODUCT_MATCHES` becomes Opportunities;
-  `AT_RISK_POLICIES` becomes Tasks assigned to each policy's `AGENT_ID`.
+| Connector | Provider | Use in Insight AI | Status |
+|---|---|---|---|
+| **Jira** | Atlassian | Create and track tickets from findings — e.g. a data-quality violation surfaced by `DQRootCause`, or a `StrategicAdvisor` recommendation | Implemented |
+| **Gmail** | Google | Send or draft email summaries of demand forecast results to stakeholders | Implemented |
 
-**Rejected, with reasons:** Linear (duplicates Jira) · Glean (competes with our own
-Cortex Search) · Gmail (native email integrations already exist) · Calendar and Contacts
-(**read-only scopes** — cannot create events) · Workday (no HCM data in scope).
 
-Wiring is `CREATE API INTEGRATION (API_PROVIDER = external_mcp)` →
-`CREATE EXTERNAL MCP SERVER` → `ALTER AGENT … SET SPECIFICATION` with `mcp_servers`.
-Because this app uses `agent:run` rather than CoWork, per-user consent must be driven
-through `SYSTEM$START_USER_OAUTH_FLOW` / `SYSTEM$FINISH_OAUTH_FLOW`.
-
-**Write actions need a confirmation gate.** `assert_read_only_sql` does not see MCP tool
-calls, and `SP_UNIFIED_DEMAND_ENGINE` already has side effects today — its WHATIF branch
-writes to `WHATIF_SIMULATION_LOG` and TRAIN runs `CREATE OR REPLACE` on a live ML model.
+**Write actions need a confirmation gate.** This is the main outstanding item: nothing
+currently stands between an agent decision and a filed ticket or a sent email. The same
+gap already exists elsewhere — `SP_UNIFIED_DEMAND_ENGINE` has side effects today, since
+its WHATIF branch writes to `WHATIF_SIMULATION_LOG` and TRAIN runs `CREATE OR REPLACE`
+on a live ML model.
 
 
 ## Repository layout

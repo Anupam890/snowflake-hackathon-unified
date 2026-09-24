@@ -475,10 +475,9 @@ def render_assistant_response(
                     st.markdown("##### 📋 Query Results")
                     st.dataframe(e_df, use_container_width=True)
 
-                    # Interactive Chart
+                    # No chart here on purpose: this tab is for inspecting the generated
+                    # SQL and its raw result. Charting lives in the Visualizations tab.
                     if not e_df.empty:
-                        render_interactive_chart(e_df, key_prefix=f"live_chart_{msg_uid}", show_heading=False)
-
                         csv_dl = e_df.to_csv(index=False).encode('utf-8')
                         st.download_button(
                             label="📥 Export Query Result as CSV",
