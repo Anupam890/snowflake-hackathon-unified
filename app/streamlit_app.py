@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import html
+import time
 import datetime
 from typing import Optional, List, Dict, Any, Tuple
 import pandas as pd
@@ -937,7 +938,17 @@ st.markdown("""
 # ---------------------------------------------------------
 
 
-@st.cache_data(ttl=30)
+# Cache lifetime for read queries. The dataset is static between runs, so a long TTL is
+# what makes a warmed cache actually useful: at the previous 30s every nav tap re-queried
+# Snowflake because the warm-up had already expired while the presenter was still talking.
+# Writes do not wait for the TTL - clear_rating_caches() drops the affected entries.
+READ_CACHE_TTL = 900
+
+# Reference data that only changes when products or the policy mix change.
+REF_CACHE_TTL = 1800
+
+
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_overview_metrics(state: Optional[str] = None):
     try:
         # In-process query execution reusing active Snowflake session
@@ -946,7 +957,7 @@ def fetch_overview_metrics(state: Optional[str] = None):
         return backend_service.get_dashboard_overview(mgr=None, state=state)
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_dts_analytics():
     try:
         return backend_service.get_dts_analytics_data(mgr=cached_sf_mgr)
@@ -954,7 +965,7 @@ def fetch_dts_analytics():
         return backend_service.get_dts_analytics_data(mgr=None)
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_risk_churn_analytics(state: Optional[str] = None):
     try:
         return backend_service.get_risk_and_churn_analytics(mgr=cached_sf_mgr, state=state)
@@ -962,7 +973,7 @@ def fetch_risk_churn_analytics(state: Optional[str] = None):
         return backend_service.get_risk_and_churn_analytics(mgr=None, state=state)
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_geospatial_analytics():
     try:
         return backend_service.get_state_geospatial_analytics(mgr=cached_sf_mgr)
@@ -970,7 +981,7 @@ def fetch_geospatial_analytics():
         return backend_service.get_state_geospatial_analytics(mgr=None)
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_trend_analytics(state: Optional[str] = None):
     try:
         return backend_service.get_trend_analytics(mgr=cached_sf_mgr, state=state)
@@ -987,22 +998,22 @@ def fetch_trend_analytics(state: Optional[str] = None):
 # clear the relevant cache afterwards.
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_strategic_recommendations():
     return backend_service.get_strategic_recommendations(mgr=cached_sf_mgr)
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_market_pricing():
     return backend_service.get_market_pricing(mgr=cached_sf_mgr)
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_plan_ratings_summary():
     return backend_service.get_plan_ratings_summary(mgr=cached_sf_mgr)
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_customer_directory(search: Optional[str] = None, state: Optional[str] = None,
                             plan: Optional[str] = None, status: Optional[str] = None,
                             limit: int = 200):
@@ -1014,24 +1025,24 @@ def fetch_customer_directory(search: Optional[str] = None, state: Optional[str] 
 
 # Filter options change only when the policy mix does, so this is cached far longer
 # than the directory rows themselves.
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=REF_CACHE_TTL)
 def fetch_plan_filter_options():
     return backend_service.get_customer_plan_filter_options(mgr=cached_sf_mgr)
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_customer_matches(customer_id: str):
     return backend_service.get_customer_matches(customer_id=customer_id, mgr=cached_sf_mgr)
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=READ_CACHE_TTL)
 def fetch_customer_360(customer_id: str):
     return backend_service.get_customer_360(customer_id=customer_id, mgr=cached_sf_mgr)
 
 
 # The catalogue changes only when products are added or withdrawn, so it is cached
 # far longer than the per-customer match rows.
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=REF_CACHE_TTL)
 def fetch_product_catalog():
     return backend_service.get_product_catalog(mgr=cached_sf_mgr)
 
@@ -1045,6 +1056,60 @@ def clear_rating_caches():
     fetch_plan_filter_options.clear()
     # SP_RATE_PLAN updates PRODUCT_CATALOG.CUSTOMER_RATING, so the catalogue is stale too.
     fetch_product_catalog.clear()
+
+
+# States offered by the dashboard cross-filter. Kept next to the warm-up so the two
+# cannot drift: a state in the navbar but not here would miss the warm-up and pay for a
+# cold query on first tap.
+FILTER_STATES = ["TX", "AZ", "IL", "CA", "PA", "NY", "GA"]
+
+
+def prewarm_caches() -> float:
+    """Populate every read cache once, right after the connection opens.
+
+    Without this the first tap on a view or a state filter pays for its queries on
+    screen. Each call below is a cached fetch, so this only costs queries on a cold
+    cache; afterwards it is a dict lookup. Runs once per session, guarded by
+    session_state rather than by a cache decorator, because the point is the side effect
+    of filling the other caches rather than this function's own return value.
+
+    Failures are swallowed deliberately: a warm-up is an optimisation, and a failing
+    query here must not stop the app from rendering. The view that needs the data
+    surfaces the real error itself.
+
+    Returns the elapsed seconds so the caller can report how long the warm-up took.
+    """
+    started = time.time()
+
+    warmers = [
+        fetch_geospatial_analytics,
+        fetch_dts_analytics,
+        fetch_strategic_recommendations,
+        fetch_market_pricing,
+        fetch_plan_ratings_summary,
+        fetch_product_catalog,
+        fetch_plan_filter_options,
+        fetch_customer_directory,
+    ]
+    for warm in warmers:
+        try:
+            warm()
+        except Exception as e:
+            print(f"[Prewarm] {getattr(warm, '__name__', warm)} failed: {e}")
+
+    # State-keyed fetches are cached per argument, so National (None) and each filter
+    # state are separate entries. Warming all of them is what makes tapping a state on
+    # the map instant instead of firing three fresh queries.
+    for state in [None] + FILTER_STATES:
+        for warm in (fetch_overview_metrics, fetch_risk_churn_analytics, fetch_trend_analytics):
+            try:
+                warm(state=state)
+            except Exception as e:
+                print(f"[Prewarm] {getattr(warm, '__name__', warm)}({state}) failed: {e}")
+
+    elapsed = time.time() - started
+    print(f"[Prewarm] Warmed all read caches in {elapsed:.1f}s")
+    return elapsed
 
 
 
@@ -1117,6 +1182,71 @@ current_wh = sf_context.get("warehouse") or "COMPUTE_WH"
 current_db = sf_context.get("database") or "UNIFIEDAI_DB"
 current_sh = sf_context.get("schema") or "UNIFIEDAI_SH"
 current_agent = env_config.get("INS_AGENT") or sf_context.get("default_agent") or "UNIFIED_ENTERPRISE_AGENT"
+
+# Warm every read cache once per session, so the first tap on a view or a state filter
+# does not pay for its queries on screen. Placed after the session context is resolved
+# (the connection is live by then) and before any view renders.
+#
+# A hand-rolled fixed overlay rather than st.spinner: st.spinner renders inline wherever
+# it is called, which puts it in the top-left corner above an otherwise empty page. The
+# overlay is written into an st.empty() placeholder so it can be cleared the moment the
+# warm-up finishes, and the <style> travels with it so it needs nothing from style.css
+# (which this page does not load).
+if not st.session_state.get("caches_warmed"):
+    warm_overlay = st.empty()
+    warm_overlay.markdown(
+        """
+        <div class="warmup-overlay">
+            <div class="warmup-box">
+                <div class="warmup-ring"></div>
+                <div class="warmup-title">❄ Loading enterprise data</div>
+                <div class="warmup-sub">Warming policy, claims, risk and market caches…</div>
+            </div>
+        </div>
+        <style>
+        .warmup-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(2, 6, 23, 0.82);
+            backdrop-filter: blur(3px);
+        }
+        .warmup-box { text-align: center; }
+        .warmup-ring {
+            width: 46px;
+            height: 46px;
+            margin: 0 auto 18px auto;
+            border: 3px solid rgba(148, 163, 184, 0.25);
+            border-top-color: #38BDF8;
+            border-radius: 50%;
+            animation: warmup-spin 0.9s linear infinite;
+        }
+        .warmup-title {
+            color: #F1F5F9;
+            font-size: 1.02rem;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+        }
+        .warmup-sub {
+            color: #94A3B8;
+            font-size: 0.82rem;
+            margin-top: 6px;
+        }
+        @keyframes warmup-spin { to { transform: rotate(360deg); } }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    try:
+        st.session_state.prewarm_seconds = prewarm_caches()
+    finally:
+        # Cleared in a finally so a failed warm-up cannot leave the overlay covering
+        # the whole app.
+        warm_overlay.empty()
+    st.session_state.caches_warmed = True
 
 # Active state cross-filter
 active_state = st.session_state.selected_state if st.session_state.selected_state != "National" else None
@@ -1193,30 +1323,6 @@ with st.sidebar:
 
     # Default Cortex AI Engine configuration (silent background execution)
     selected_model = "claude-3-5-sonnet"
-    enable_reasoning = True
-    auto_run_sql = True
-
-    # 3. Global Timeframe Filter
-    # Options reflect the actual span of CORE data (policies 2024-09 to 2026-08, claims
-    # 2025-09 to 2026-09) against a current date of 2026. The previous default of
-    # "FY2024 YTD" named a year the data has largely moved past.
-    st.markdown('<div class="sidebar-section-header">TIMEFRAME SCOPE</div>', unsafe_allow_html=True)
-    time_filter = st.selectbox(
-        "Timeframe Filter",
-        ["All Time Historical", "FY2026 YTD", "FY2026 Q3", "Last 90 Days",
-         "Last 30 Days", "FY2025 Full Year"],
-        index=0,
-        label_visibility="collapsed",
-        help=(
-            "Reference label only — dashboard queries are not yet scoped by date, so "
-            "every view currently reads the full history."
-        ),
-    )
-    st.caption(
-        f"<span style='font-size:0.68rem; color:#64748B;'>Label only · "
-        f"{html.escape(time_filter)}</span>",
-        unsafe_allow_html=True,
-    )
 
     # Quick Actions & User Footer
     if st.button("🧹 Clear Chat History", use_container_width=True):

@@ -195,9 +195,6 @@ with st.sidebar:
         label_visibility="collapsed"
     )
 
-    enable_reasoning = st.toggle("Enable Extended Reasoning", value=True)
-    auto_run_sql = st.toggle("Auto-Execute Generated SQL", value=True)
-
     st.divider()
 
     # Quick Actions
